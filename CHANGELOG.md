@@ -21,6 +21,9 @@
 
 ### Fixed
 
+- Allow the first GitHub Draft Release to continue when GitHub CLI explicitly
+  reports that its release tag does not exist, while retaining failures for
+  every other GitHub CLI error.
 - Fixed a stale native exit-code check that could have rejected a successful
   package build after an expected missing GitHub Release check.
 - Fixed the dry-run result variable so it cannot collide with the `-DryRun`

@@ -148,6 +148,63 @@ function Require-Command {
 
 <#
 .SYNOPSIS
+Reads a GitHub Release while preserving the native exit code and both output streams.
+
+.PARAMETER GhPath
+The resolved GitHub CLI executable path.
+
+.PARAMETER Tag
+The vX.Y.Z tag whose GitHub Release state is being queried.
+
+.OUTPUTS
+PSCustomObject. The native exit code, standard output, standard error, and combined details.
+#>
+function Get-GitHubReleaseViewResult {
+    param(
+        [Parameter(Mandatory)]
+        [string]$GhPath,
+
+        [Parameter(Mandatory)]
+        [string]$Tag
+    )
+
+    # A redirected stderr file prevents expected CLI failures from becoming terminating PowerShell errors.
+    $stderrPath = Join-Path ([System.IO.Path]::GetTempPath()) "SmartWindowSize-gh-release-view-$([guid]::NewGuid().ToString('N')).stderr"
+    $stdout = @()
+    $stderr = ''
+    $exitCode = $null
+    $previousErrorActionPreference = $ErrorActionPreference
+
+    try {
+        # Keep native non-zero exit codes observable so only known "not found" output is accepted.
+        $ErrorActionPreference = 'Continue'
+        $PSNativeCommandUseErrorActionPreference = $false
+        $stdout = @(& $GhPath release view $Tag --repo $ExpectedRepository --json url --jq '.url' 2> $stderrPath)
+        $exitCode = $LASTEXITCODE
+        if (Test-Path -LiteralPath $stderrPath -PathType Leaf) {
+            $stderr = Get-Content -LiteralPath $stderrPath -Raw
+        }
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+        if (Test-Path -LiteralPath $stderrPath -PathType Leaf) {
+            Remove-Item -LiteralPath $stderrPath -Force
+        }
+    }
+
+    $standardOutput = ($stdout | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
+    $details = (@($standardOutput.Trim(), $stderr.Trim()) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join [Environment]::NewLine
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        StandardOutput = $standardOutput.Trim()
+        StandardError = $stderr.Trim()
+        Details = $details
+    }
+}
+
+
+<#
+.SYNOPSIS
 Reads and validates the release version from the root extension manifest.
 
 .PARAMETER ManifestPath
@@ -334,16 +391,17 @@ function Test-GitHubReleaseAvailable {
         [string]$Tag
     )
 
-    $output = @(& $GhPath release view $Tag --repo $ExpectedRepository --json url --jq '.url' 2>&1)
-    $exitCode = $LASTEXITCODE
-    if ($exitCode -eq 0) {
-        throw "GitHub Release for '$Tag' already exists: $(($output | ForEach-Object { $_.ToString() }) -join ' ')"
+    $result = Get-GitHubReleaseViewResult -GhPath $GhPath -Tag $Tag
+    if ($result.ExitCode -eq 0) {
+        throw "GitHub Release for '$Tag' already exists: $($result.StandardOutput)"
     }
 
-    $details = ($output | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
-    if ($details -notmatch '(?i)(not found|release not found|could not find release)') {
-        throw "Unable to verify whether GitHub Release '$Tag' exists.`n$details"
+    # Only the CLI's explicit missing-release result is normal for a first or new release.
+    if ($result.ExitCode -eq 1 -and $result.Details -match '(?i)\b(release not found|could not find release)\b') {
+        return
     }
+
+    throw "Unable to verify whether GitHub Release '$Tag' exists (exit code $($result.ExitCode)).`n$($result.Details)"
 }
 
 
@@ -499,12 +557,12 @@ function Invoke-DryRunPreflight {
             $warnings.Add("GitHub CLI is not authenticated for github.com:`n$(($authOutput | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine)")
         }
         else {
-            $releaseOutput = @(& $ghPath release view $tag --repo $ExpectedRepository --json url --jq '.url' 2>&1)
-            if ($LASTEXITCODE -eq 0) {
+            $releaseResult = Get-GitHubReleaseViewResult -GhPath $ghPath -Tag $tag
+            if ($releaseResult.ExitCode -eq 0) {
                 $warnings.Add("Real release is blocked because GitHub Release '$tag' already exists.")
             }
-            elseif ((($releaseOutput | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine) -notmatch '(?i)(not found|release not found|could not find release)') {
-                $warnings.Add("GitHub Release '$tag' could not be verified during dry run.")
+            elseif ($releaseResult.ExitCode -ne 1 -or $releaseResult.Details -notmatch '(?i)\b(release not found|could not find release)\b') {
+                $warnings.Add("GitHub Release '$tag' could not be verified during dry run (exit code $($releaseResult.ExitCode)):`n$($releaseResult.Details)")
             }
         }
     }
