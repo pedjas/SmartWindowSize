@@ -16,6 +16,7 @@ export const FALLBACK_MAXIMUM_WINDOW_SIZE = Object.freeze({ width: 7680, height:
  * Limits a requested size to the usable bounds of a display when available.
  * @param {{width: number, height: number}} size Requested window dimensions.
  * @param {chrome.system.display.DisplayUnitInfo|undefined} display Target display.
+ * @param {boolean} useSavedPosition Whether a saved rule position may relocate the window.
  * @returns {{width: number, height: number}} Safe window dimensions.
  */
 export function clampSize(size, display) {
@@ -36,11 +37,11 @@ export function clampSize(size, display) {
  * @param {chrome.system.display.DisplayUnitInfo|undefined} display Target display.
  * @returns {{width: number, height: number, left: number, top: number, sizeAdjusted: boolean}} Bounds safe for windows.update.
  */
-export function constrainWindowBounds(windowInfo, desired, rule, display) {
+export function constrainWindowBounds(windowInfo, desired, rule, display, useSavedPosition = true) {
   const size = clampSize(desired, display);
   const area = display?.workArea ?? display?.bounds;
-  const preferredLeft = rule?.position?.enabled ? rule.position.x : windowInfo.left;
-  const preferredTop = rule?.position?.enabled ? rule.position.y : windowInfo.top;
+  const preferredLeft = useSavedPosition && rule?.position?.enabled ? rule.position.x : windowInfo.left;
+  const preferredTop = useSavedPosition && rule?.position?.enabled ? rule.position.y : windowInfo.top;
   if (!area) {
     return {
       ...size,
@@ -259,16 +260,17 @@ export async function bringWindowOnScreen(windowId, canApply = async () => true)
  * @param {number} windowId Browser window identifier.
  * @param {{status: string, rule?: object, size?: {width: number, height: number}}} resolved Rule resolution result.
  * @param {Function} canApply Last-moment source-tab and configuration check.
+ * @param {boolean} useSavedPosition Whether this is a new browser window that may restore a saved position.
  * @returns {Promise<{changed: boolean, sizeAdjusted: boolean, size: {width: number, height: number}}>} Applied result.
  */
-export async function applyResolvedRule(windowId, resolved, canApply = async () => true) {
+export async function applyResolvedRule(windowId, resolved, canApply = async () => true, useSavedPosition = false) {
   if (resolved.status === "DISABLED") return { changed: false };
   const rule = resolved.rule;
   const current = await chrome.windows.get(windowId);
   if (current.state !== "normal") return { changed: false };
   const desired = rule ? { width: rule.width, height: rule.height } : resolved.size ?? { width: current.width, height: current.height };
   const display = await displayForRule(rule, current);
-  const bounds = constrainWindowBounds(current, desired, rule, display);
+  const bounds = constrainWindowBounds(current, desired, rule, display, useSavedPosition);
   if (!await canApply()) return { changed: false, skipped: "source-changed" };
   if (current.width === bounds.width && current.height === bounds.height && current.left === bounds.left && current.top === bounds.top) {
     return { changed: false, sizeAdjusted: bounds.sizeAdjusted, size: { width: bounds.width, height: bounds.height } };

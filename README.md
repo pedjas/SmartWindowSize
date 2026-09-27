@@ -2,6 +2,8 @@
 
 Project repository: [github.com/pedjas/SmartWindowSize](https://github.com/pedjas/SmartWindowSize)
 
+User-visible release notes: [CHANGELOG.md](CHANGELOG.md)
+
 SmartWindowSize helps keep desktop browser windows on screen and can remember
 their size and optional position for websites. It controls the outer browser
 window, not the web page viewport. The active tab determines which rule applies.
@@ -127,6 +129,11 @@ A deliberate user move partly off screen may be saved. The next automatic
 application corrects the position only as much as needed, reducing size only
 when it cannot fit.
 
+When a site opens, navigates, or becomes active in an existing browser window,
+its saved position is not restored. The window keeps its current position and
+is moved only as much as necessary to remain visible after the saved size is
+applied. A new browser window may restore a saved position.
+
 **Bring window on screen** in the toolbar right-click menu explicitly performs
 this correction. The resulting size and optional position are saved under the
 normal rule-saving conditions. With multiple displays, the current target
@@ -182,7 +189,7 @@ its own package. Safari, mobile browsers, and Netscape are not supported.
 For local Chromium installation:
 
 1. Open the browser's extensions page and enable Developer mode.
-2. Choose **Load unpacked** and select `install/SmartWindowSize-chrome/`.
+2. Choose **Load unpacked** and select `install/SmartWindowSize-Chrome/`.
 3. On later builds, keep using that same directory and reload the existing
    extension. Repeated removal and reinstallation is not required: removing an
    extension deletes its browser-local rules and settings. Export JSON first if
@@ -192,7 +199,7 @@ For local Firefox testing:
 
 1. Open `about:debugging#/runtime/this-firefox`.
 2. Choose **Load Temporary Add-on** and select the manifest in
-   `install/SmartWindowSize-<version>-firefox/`.
+   `install/SmartWindowSize-Firefox/`.
 3. The development Gecko ID is `SmartWindowSize@pedjas`. Temporary installation
    ends when Firefox restarts.
 

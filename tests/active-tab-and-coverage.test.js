@@ -54,8 +54,8 @@ async function backgroundFixture() {
     loadDiagnostics: async () => [], recordDiagnostic: async () => {},
     updateActionIcon: async () => { controls.afterIcon(); return []; },
     updateDefaultActionIcon: async () => [],
-    applyResolvedRule: async (windowId, resolved) => {
-      applied.push({ windowId, status: resolved.status, width: resolved.rule?.width });
+    applyResolvedRule: async (windowId, resolved, _canApply, useSavedPosition) => {
+      applied.push({ windowId, status: resolved.status, width: resolved.rule?.width, useSavedPosition });
       return { changed: true, sizeAdjusted: false };
     },
     chrome: {
@@ -97,6 +97,15 @@ test("switching tabs applies the newly active tab and does not require window fo
 });
 
 
+test("existing tabs do not restore a saved position, while a new browser window may do so", async () => {
+  const fixture = await backgroundFixture();
+  await fixture.apply(fixture.tabs.get(1));
+  await fixture.apply(fixture.tabs.get(3), true);
+  assert.equal(fixture.applied[0].useSavedPosition, false);
+  assert.equal(fixture.applied[1].useSavedPosition, true);
+});
+
+
 test("a tab that becomes inactive during asynchronous processing cannot resize the window", async () => {
   const fixture = await backgroundFixture();
   fixture.controls.afterIcon = () => { fixture.tabs.get(1).active = false; };
@@ -122,6 +131,7 @@ async function ruleEditorFixture(access = {}) {
   const rule = fixtureRule();
   const requests = [];
   let onMessage;
+  let confirmations = 0;
   const context = vm.createContext({
     APP_VERSION: "test", SCOPE_PRIORITY, scopeForUrl, matchingRulesForUrl, resolveRule, URL, structuredClone, crypto: { randomUUID: () => "test-id" },
     installClientErrors: () => {}, runClientAction: async (_operation, action) => action(),
@@ -131,7 +141,7 @@ async function ruleEditorFixture(access = {}) {
       if (message.type === "prepare-site-rule") return { rule: { ...rule, id: message.existing?.id ?? "new-rule", scope: { type: message.scope, value: scopeForUrl(message.url, message.scope) } } };
       return { ok: true };
     },
-    location: { href: "https://extension.example/rules?tabId=1" }, window: { close() {} },
+    location: { href: "https://extension.example/rules?tabId=1" }, window: { close() {} }, confirm: () => { confirmations += 1; return true; },
     document: { querySelector: (selector) => controls.get(selector.slice(1)), querySelectorAll: () => [], createElement: element },
     chrome: { runtime: { onMessage: { addListener(listener) { onMessage = listener; } }, sendMessage: async (message) => {
       requests.push(message);
@@ -142,7 +152,7 @@ async function ruleEditorFixture(access = {}) {
   });
   vm.runInContext(await scriptBody("rule-delete/rule-delete.js"), context);
   await new Promise((resolve) => setImmediate(resolve));
-  return { controls, requests, rule, refresh: async () => { onMessage({ type: "rule-editors-changed" }); await new Promise((resolve) => setImmediate(resolve)); }, edit: vm.runInContext("openEditor", context), state: () => vm.runInContext("state", context) };
+  return { controls, requests, rule, refresh: async () => { onMessage({ type: "rule-editors-changed" }); await new Promise((resolve) => setImmediate(resolve)); }, edit: vm.runInContext("openEditor", context), state: () => vm.runInContext("state", context), confirmations: () => confirmations };
 }
 
 
@@ -177,6 +187,19 @@ test("Edit retains coverage and identity; cancelling an empty Add restores dialo
   fixture.controls.get("add").listeners.click();
   fixture.controls.get("cancel-edit").listeners.click();
   assert.equal(fixture.controls.get("save").disabled, false);
+});
+
+
+test("Reload confirms only when staged rules or editor fields have changed", async () => {
+  const fixture = await ruleEditorFixture();
+  fixture.controls.get("reload").listeners.click();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(fixture.confirmations(), 0);
+  fixture.edit(fixture.rule);
+  fixture.controls.get("remember-position").checked = true;
+  fixture.controls.get("reload").listeners.click();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(fixture.confirmations(), 1);
 });
 
 

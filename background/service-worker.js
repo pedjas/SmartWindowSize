@@ -1,5 +1,5 @@
 /**
- * SmartWindowSize | Version: 0.2.61 | Last updated: 2026-09-27 17:39:15 +02:00
+ * SmartWindowSize | Version: 1.0.1 | Last updated: 2026-09-27 19:59:34 +02:00
  *
  * Coordinates serialized window operations, validated configuration writes,
  * unique dialogs, and session diagnostics.
@@ -118,9 +118,9 @@ function windowKey(id) { return `windowState:${id}`; }
 function isSiteWindow(window) { return !window.type || window.type === "normal"; }
 
 
-/** Replaces the context menu after previous registrations finish. @returns {Promise<unknown>} Completion. */
-function refreshContextMenus() {
-  menuQueue = menuQueue.catch(() => undefined).then(createContextMenus);
+/** Replaces the context menu after previous registrations finish. @param {object|undefined} tab Active tab used to set site-rule availability immediately. @returns {Promise<unknown>} Completion. */
+function refreshContextMenus(tab = undefined) {
+  menuQueue = menuQueue.catch(() => undefined).then(() => createContextMenus(tab));
   return menuQueue;
 }
 
@@ -219,8 +219,8 @@ async function flushPendingBounds(id) {
 }
 
 
-/** Applies the active tab's latest rule inside the owning window queue. @param {object} tab Candidate tab. @returns {Promise<void>} Completion. */
-async function applyForTab(tab) {
+/** Applies the active tab's latest rule inside the owning window queue. @param {object} tab Candidate tab. @param {boolean} useSavedPosition Whether a newly created browser window may restore a saved position. @returns {Promise<void>} Completion. */
+async function applyForTab(tab, useSavedPosition = false) {
   if (!Number.isInteger(tab?.id) || tab.windowId === chrome.windows.WINDOW_ID_NONE) return;
   return inWindow(tab.windowId, async () => {
     await flushPendingBounds(tab.windowId);
@@ -249,7 +249,7 @@ async function applyForTab(tab) {
     if (!await canApply()) return;
     const appliedResolution = resolved.rule && !config.global.rememberMonitor
       ? { ...resolved, rule: { ...resolved.rule, display: { enabled: false, id: null } } } : resolved;
-    const application = await changeWindow(tab.windowId, () => applyResolvedRule(tab.windowId, appliedResolution, canApply));
+    const application = await changeWindow(tab.windowId, () => applyResolvedRule(tab.windowId, appliedResolution, canApply, useSavedPosition));
     if (resolved.status === "RULE" && application.sizeAdjusted) {
       await updateConfig((latest) => {
         const current = resolveRule(tab.url, latest);
@@ -547,7 +547,8 @@ function handleExtensionRequest(message, sender, sendResponse) {
 
 /** Initializes missing baselines without treating browser startup as a user resize. @returns {Promise<void>} Completion. */
 async function initialize() {
-  for (const tab of await chrome.tabs.query({ active: true })) activeTabs.set(tab.windowId, tab);
+  const activeTabsAtStartup = await chrome.tabs.query({ active: true });
+  for (const tab of activeTabsAtStartup) activeTabs.set(tab.windowId, tab);
   for (const window of await chrome.windows.getAll({})) {
     await inWindow(window.id, async () => {
       if (!await readSession(windowKey(window.id))) await writeSession(windowKey(window.id), { bounds: window, state: window.state });
@@ -559,7 +560,7 @@ async function initialize() {
       await removeSession(`newWindow:${window.id}`);
     }
   }
-  await refreshContextMenus();
+  await refreshContextMenus(activeTabsAtStartup[0]);
   await chrome.action.setBadgeText({ text: "" });
   await scheduleIconRefresh();
 }
@@ -578,15 +579,15 @@ chrome.storage.onChanged.addListener((changes, area) => {
 chrome.tabs.onActivated.addListener(({ tabId }) => {
   chrome.tabs.get(tabId).then(async (tab) => {
     activeTabs.set(tab.windowId, tab);
-    await refreshContextMenus();
+    await refreshContextMenus(tab);
     return applyForTab(tab);
   }).catch((error) => reportDiagnostic("Activate tab rule", error));
 });
 chrome.tabs.onUpdated.addListener((_id, change, tab) => {
   if (change.url) withEditors(() => notifyRuleEditors()).catch((error) => reportDiagnostic("Refresh rule editors", error));
   if (tab.active) activeTabs.set(tab.windowId, tab);
-  if (change.url && tab.active) refreshContextMenus().catch((error) => reportDiagnostic("Refresh context menu", error));
-  if (change.url || change.status === "complete") applyForTab(tab).catch((error) => reportDiagnostic("Load tab rule", error));
+  if (change.url && tab.active) refreshContextMenus(tab).catch((error) => reportDiagnostic("Refresh context menu", error));
+  if (change.url || change.status === "complete") applyForTab(tab, initializingWindows.has(tab.windowId)).catch((error) => reportDiagnostic("Load tab rule", error));
 });
 chrome.tabs.onRemoved.addListener((id) => {
   withEditors(() => notifyRuleEditors()).catch((error) => reportDiagnostic("Release rule editor", error));

@@ -30,6 +30,9 @@ let state = null;
 /** Identifier of the staged rule displayed in the editor, or null when adding. @type {string|null} */
 let editingRuleId = null;
 
+/** Initial local values of the currently open editor, used to detect an unsaved field change. @type {{scope: string, rememberPosition: boolean}|null} */
+let editorBaseline = null;
+
 /** Immutable initial matching-rule snapshot used to detect conflicting saves. @type {object[]} */
 let baseRules = [];
 
@@ -128,6 +131,7 @@ function openEditor(rule = null) {
   editingRuleId = rule?.id ?? null;
   scopeInput.value = rule?.scope.type ?? "";
   positionInput.checked = rule?.position?.enabled === true;
+  editorBaseline = { scope: scopeInput.value, rememberPosition: positionInput.checked };
   document.querySelector("#editor-title").textContent = rule ? "Edit rule" : "Add rule";
   document.querySelector("#confirm-rule").textContent = rule ? "Update rule" : "Add rule";
   document.querySelector("#confirm-rule").title = rule ? "Update this staged rule using the current window size" : "Add a staged rule using the current window size";
@@ -142,9 +146,19 @@ function openEditor(rule = null) {
 /** Closes the framed editor without changing staged rules. @returns {void} */
 function closeEditor() {
   editingRuleId = null;
+  editorBaseline = null;
   editor.hidden = true;
   addButton.hidden = false;
   synchronizeScopeSelection();
+}
+
+
+/** Determines whether staged rules or the visible editor differ from the loaded state. @returns {boolean} Whether Reload must confirm discarding local edits. */
+function hasUnsavedChanges() {
+  const normalized = (rules) => [...rules].sort((left, right) => left.id.localeCompare(right.id));
+  const rulesChanged = JSON.stringify(normalized(state?.rules ?? [])) !== JSON.stringify(normalized(baseRules));
+  const editorChanged = !editor.hidden && editorBaseline !== null && (scopeInput.value !== editorBaseline.scope || positionInput.checked !== editorBaseline.rememberPosition);
+  return rulesChanged || editorChanged;
 }
 
 
@@ -255,7 +269,7 @@ document.querySelector("#bring-to-front").addEventListener("click", async () => 
   await runClientAction("Focus source window", () => request({ type: "focus-window", tabId }));
 });
 document.querySelector("#reload").addEventListener("click", () => {
-  if (!busy && (!state?.ownsEditor || confirm("Discard staged changes and reload the current rules?"))) runClientAction("Reload rules", load);
+  if (!busy && (!state?.ownsEditor || !hasUnsavedChanges() || confirm("Discard staged changes and reload the current rules?"))) runClientAction("Reload rules", load);
 });
 document.querySelector("#focus-editor").addEventListener("click", () => runClientAction("Focus editable dialog", () => request({ type: "focus-rule-editor", tabId })));
 document.querySelector("#enable-editing").addEventListener("click", async () => {

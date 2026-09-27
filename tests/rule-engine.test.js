@@ -122,6 +122,15 @@ test("saved position is corrected before a fitting size is changed", () => {
 });
 
 
+test("existing browser windows ignore a saved rule position while keeping resized bounds visible", () => {
+  const display = { workArea: { left: 0, top: 0, width: 1920, height: 1080 } };
+  const currentWindow = { left: 100, top: 100, width: 800, height: 600 };
+  const ruleWithPosition = { position: { enabled: true, x: 1400, y: 400 } };
+  const result = constrainWindowBounds(currentWindow, { width: 1200, height: 960 }, ruleWithPosition, display, false);
+  assert.deepEqual(result, { width: 1200, height: 960, left: 100, top: 100, sizeAdjusted: false });
+});
+
+
 test("manual recovery keeps a fitting current size and minimally returns it to the screen", () => {
   const display = { workArea: { left: 0, top: 0, width: 1920, height: 1080 } };
   const currentWindow = { left: 1700, top: 800, width: 800, height: 600 };

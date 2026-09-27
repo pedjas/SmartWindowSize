@@ -160,18 +160,52 @@ form.addEventListener("input", () => { formDirty = true; });
 form.addEventListener("change", () => { formDirty = true; });
 
 
-/** Renders all saved rules and binds deletion controls. @returns {void} */
+/** Creates one labeled detail for a readable multi-row rule card. @param {string} label Field caption. @param {string} value Field value. @returns {HTMLDivElement} Detail element. */
+function createRuleDetail(label, value) {
+  const detail = document.createElement("div");
+  const caption = document.createElement("span");
+  const content = document.createElement("strong");
+  caption.textContent = label;
+  content.textContent = value;
+  detail.append(caption, content);
+  return detail;
+}
+
+
+/** Renders all saved rules as readable cards and binds their deletion controls. @returns {void} */
 function renderRules() {
   document.querySelector("#rules-empty").hidden = config.rules.length !== 0;
   document.querySelector("#rules").replaceChildren(...config.rules.map((rule) => {
-    const row = document.createElement("tr");
-    row.innerHTML = `<td></td><td></td><td>${rule.width} × ${rule.height}</td><td>${rule.position.enabled ? "Yes" : "No"}</td><td>${rule.position.enabled ? `${rule.position.x},${rule.position.y}` : ""}</td><td>${rule.enabled ? "Enabled" : "Disabled"}</td><td>${new Date(rule.lastUpdatedAt).toLocaleDateString()}</td><td><button>Delete</button></td>`;
-    row.children[0].textContent = RULE_SCOPE_LABELS[rule.scope.type] ?? "Unknown scope";
-    row.children[1].textContent = rule.scope.value;
-    row.querySelector("button").title = "Delete this saved rule";
-    row.querySelector("button").disabled = rulesLocked;
-    row.querySelector("button").addEventListener("click", () => mutate({ type: "delete-rule", ruleId: rule.id, base: rule }));
-    return row;
+    const card = document.createElement("article");
+    card.className = "rule-card";
+    const header = document.createElement("div");
+    header.className = "rule-card-header";
+    const scope = document.createElement("h3");
+    scope.textContent = RULE_SCOPE_LABELS[rule.scope.type] ?? "Unknown scope";
+    const status = document.createElement("strong");
+    status.textContent = rule.enabled ? "Enabled" : "Disabled";
+    header.append(scope, status);
+    const value = document.createElement("p");
+    value.className = "rule-card-value";
+    value.textContent = rule.scope.value;
+    const details = document.createElement("div");
+    details.className = "rule-card-details";
+    details.append(
+      createRuleDetail("Size", `${rule.width} × ${rule.height}`),
+      createRuleDetail("Remember position", rule.position.enabled ? "Yes" : "No"),
+      createRuleDetail("Position", rule.position.enabled ? `${rule.position.x},${rule.position.y}` : ""),
+      createRuleDetail("Last updated", new Date(rule.lastUpdatedAt).toLocaleDateString())
+    );
+    const actions = document.createElement("div");
+    actions.className = "rule-card-actions";
+    const remove = document.createElement("button");
+    remove.textContent = "Delete";
+    remove.title = "Delete this saved rule";
+    remove.disabled = rulesLocked;
+    remove.addEventListener("click", () => mutate({ type: "delete-rule", ruleId: rule.id, base: rule }));
+    actions.append(remove);
+    card.append(header, value, details, actions);
+    return card;
   }));
 }
 

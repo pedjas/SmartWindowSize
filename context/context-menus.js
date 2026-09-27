@@ -47,7 +47,7 @@ function updateContextMenu(id, properties) {
  * @returns {Promise<boolean>} Whether the active tab has a supported HTTP(S) URL.
  */
 async function activeTabSupportsRules() {
-  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  const tab = await resolveContextMenuTab(undefined, (queryInfo) => chrome.tabs.query(queryInfo));
   return Boolean(toUrl(tab?.url));
 }
 
@@ -60,6 +60,7 @@ async function activeTabSupportsRules() {
  */
 export async function refreshSiteRuleMenu(tab) {
   const config = await loadConfig();
+  if (!tab) tab = await resolveContextMenuTab(undefined, (queryInfo) => chrome.tabs.query(queryInfo));
   await updateContextMenu("delete-matching-rules", { enabled: config.global.enabled && Boolean(toUrl(tab?.url)) });
   const refreshed = chrome.contextMenus.refresh?.();
   if (refreshed?.then) await refreshed;
@@ -68,11 +69,12 @@ export async function refreshSiteRuleMenu(tab) {
 
 /**
  * Recreates the toolbar context menu for current-window operations and application navigation.
+ * @param {chrome.tabs.Tab|undefined} currentTab Known active tab used for immediate site-rule availability.
  * @returns {Promise<void>} Completes after every current menu entry is registered.
  */
-export async function createContextMenus() {
+export async function createContextMenus(currentTab = undefined) {
   const config = await loadConfig();
-  const canSetRules = config.global.enabled && await activeTabSupportsRules().catch(() => false);
+  const canSetRules = config.global.enabled && (currentTab ? Boolean(toUrl(currentTab.url)) : await activeTabSupportsRules().catch(() => false));
   await chrome.contextMenus.removeAll();
   const entries = [
     { id: "global-enabled", type: "checkbox", title: "Extension enabled", checked: config.global.enabled, contexts: ["action"] },

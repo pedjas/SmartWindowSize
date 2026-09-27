@@ -5,6 +5,16 @@ Builds verified SmartWindowSize installation artifacts for Chromium or Firefox.
 .DESCRIPTION
 Copies only allowlisted runtime files into install/, writes the target manifest,
 creates a ZIP whose root contains manifest.json, and validates the ZIP layout.
+
+.PARAMETER Target
+The browser package family to build. The all value creates both release ZIP assets.
+
+.PARAMETER FirefoxExtensionId
+The Gecko extension identifier inserted only into the generated Firefox manifest.
+
+.PARAMETER TestInstallRoot
+An optional empty directory under the system temporary directory used only by
+the release dry-run. Normal packaging always uses the project install/ directory.
 #>
 
 [CmdletBinding()]
@@ -12,10 +22,15 @@ param(
     [ValidateSet('chromium', 'firefox', 'all')]
     [string]$Target = 'chromium',
 
-    [string]$FirefoxExtensionId = 'SmartWindowSize@pedjas'
+    [string]$FirefoxExtensionId = 'SmartWindowSize@pedjas',
+
+    [string]$TestInstallRoot
 )
 
+<# Strict mode prevents incomplete package metadata from silently producing an invalid artifact. #>
 Set-StrictMode -Version Latest
+
+<# Every failed validation must stop before a later package artifact can be reported as valid. #>
 $ErrorActionPreference = 'Stop'
 
 <# The repository root derived from this script's known tools/ location. #>
@@ -24,8 +39,24 @@ $ProjectRoot = Split-Path -Parent $PSScriptRoot
 <# The only runtime directories allowed in a release artifact. #>
 $RuntimeDirectories = @('about', 'background', 'context', 'core', 'icons', 'options', 'popup', 'readme-viewer', 'rule-delete', 'size-picker')
 
-<# The generated, Git-ignored release output directory. #>
-$InstallRoot = Join-Path $ProjectRoot 'install'
+<# The generated release output directory, either install/ or a guarded temporary dry-run location. #>
+if ([string]::IsNullOrWhiteSpace($TestInstallRoot)) {
+    $InstallRoot = Join-Path $ProjectRoot 'install'
+}
+else {
+    $temporaryRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
+    $InstallRoot = [System.IO.Path]::GetFullPath($TestInstallRoot)
+    $temporaryRootPrefix = $temporaryRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $InstallRoot.StartsWith($temporaryRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'TestInstallRoot must be located under the system temporary directory.'
+    }
+}
+
+<# The only unpacked directories the packaging procedure owns and may replace. #>
+$ControlledUnpackedDirectories = @(
+    (Join-Path $InstallRoot 'SmartWindowSize-Chrome'),
+    (Join-Path $InstallRoot 'SmartWindowSize-Firefox')
+)
 
 <# The versioned installation instructions copied into every release artifact. #>
 $InstallReadmeSource = Join-Path $ProjectRoot 'readme.txt'
@@ -33,28 +64,20 @@ $InstallReadmeSource = Join-Path $ProjectRoot 'readme.txt'
 
 <#
 .SYNOPSIS
-Reads and verifies the single application version shared by source and manifest.
+Reads the application version from the root extension manifest.
 
 .OUTPUTS
-System.String
+System.String. The version read exclusively from root manifest.json.
 #>
 function Get-ApplicationVersion {
     $manifestPath = Join-Path $ProjectRoot 'manifest.json'
-    $versionModulePath = Join-Path $ProjectRoot 'core/app-version.js'
     $manifestVersion = (Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json).version
-    $versionModule = Get-Content -LiteralPath $versionModulePath -Raw
-    $match = [regex]::Match($versionModule, 'APP_VERSION = "([^"]+)"')
 
-    if (-not $match.Success) {
-        throw 'The central APP_VERSION value could not be read.'
+    if ([string]::IsNullOrWhiteSpace($manifestVersion)) {
+        throw 'The root manifest.json does not contain an application version.'
     }
 
-    $moduleVersion = $match.Groups[1].Value
-    if ($manifestVersion -ne $moduleVersion) {
-        throw "manifest.json version $manifestVersion does not match APP_VERSION $moduleVersion."
-    }
-
-    return $manifestVersion
+    return [string]$manifestVersion
 }
 
 
@@ -73,6 +96,9 @@ The validated application version inserted into a Firefox manifest template.
 
 .PARAMETER GeckoId
 The AMO extension identifier required for Firefox packaging.
+
+.OUTPUTS
+None. Recreates only the controlled unpacked destination with approved runtime files.
 #>
 function New-ReleaseDirectory {
     param(
@@ -89,19 +115,26 @@ function New-ReleaseDirectory {
         [string]$GeckoId
     )
 
+    # Only the two stable local-testing directories are controlled by this procedure.
+    if ($Destination -notin $ControlledUnpackedDirectories) {
+        throw "Refusing to replace an unmanaged unpacked directory: $Destination"
+    }
+
     if (Test-Path -LiteralPath $Destination) {
-        # The stable Chromium unpacked directory is intentionally replaced so Brave keeps its local extension ID.
+        # Stable unpacked directories are intentionally replaced so browsers retain their local extension paths.
         Remove-Item -LiteralPath $Destination -Recurse -Force
     }
 
     New-Item -ItemType Directory -Path $Destination | Out-Null
 
+    # The packaged user guide is required in both browser-specific artifacts.
     if (-not (Test-Path -LiteralPath $InstallReadmeSource -PathType Leaf)) {
         throw "Required installation readme is missing: $InstallReadmeSource"
     }
 
     Copy-Item -LiteralPath $InstallReadmeSource -Destination (Join-Path $Destination 'readme.txt')
 
+    # Copy only the runtime allowlist so tests and private project material cannot leak into packages.
     foreach ($directory in $RuntimeDirectories) {
         $source = Join-Path $ProjectRoot $directory
         if (-not (Test-Path -LiteralPath $source -PathType Container)) {
@@ -111,6 +144,7 @@ function New-ReleaseDirectory {
         Copy-Item -LiteralPath $source -Destination $Destination -Recurse
     }
 
+    # Chromium copies the root manifest, while Firefox receives its separate compatibility manifest.
     $manifestDestination = Join-Path $Destination 'manifest.json'
     if ($TargetBrowser -eq 'chromium') {
 
@@ -146,6 +180,9 @@ The prepared unpacked extension directory.
 
 .PARAMETER Archive
 The ZIP path to create.
+
+.OUTPUTS
+None. Creates and validates a ZIP whose root contains manifest.json and readme.txt.
 #>
 function New-ReleaseArchive {
     param(
@@ -160,6 +197,7 @@ function New-ReleaseArchive {
         throw "Release archive already exists: $Archive. Remove it manually before rebuilding."
     }
 
+    # Archive directory contents rather than the directory itself so manifest.json remains at ZIP root.
     Compress-Archive -Path (Join-Path $Directory '*') -DestinationPath $Archive -CompressionLevel Optimal
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $zip = [System.IO.Compression.ZipFile]::OpenRead($Archive)
@@ -196,6 +234,9 @@ The validated application version used in artifact names.
 
 .PARAMETER GeckoId
 The Firefox AMO identifier passed to the Firefox manifest template.
+
+.OUTPUTS
+None. Creates one stable unpacked directory and its versioned browser ZIP.
 #>
 function New-TargetRelease {
     param(
@@ -209,11 +250,12 @@ function New-TargetRelease {
         [string]$GeckoId
     )
 
-    $suffix = if ($TargetBrowser -eq 'firefox') { '-firefox' } else { '-chrome' }
-    $releaseName = "SmartWindowSize-$Version$suffix"
-    $directoryName = if ($TargetBrowser -eq 'chromium') { 'SmartWindowSize-chrome' } else { $releaseName }
+    # Stable unpacked names keep local browser loading paths unchanged across release versions.
+    $browserName = if ($TargetBrowser -eq 'firefox') { 'Firefox' } else { 'Chrome' }
+    $directoryName = "SmartWindowSize-$browserName"
+    $archiveName = "SmartWindowSize-$browserName-v$Version.zip"
     $directory = Join-Path $InstallRoot $directoryName
-    $archive = Join-Path $InstallRoot "$releaseName.zip"
+    $archive = Join-Path $InstallRoot $archiveName
 
     if ($TargetBrowser -eq 'firefox' -and [string]::IsNullOrWhiteSpace($GeckoId)) {
         throw 'Firefox packaging requires -FirefoxExtensionId with the AMO Gecko identifier.'

@@ -2,4 +2,12 @@ body { font: 15px system-ui, sans-serif; color: #18212f; background: #f8fafc; ma
 .rules-divider { width: 100%; border: 0; border-top: 1px solid #cbd5e1; margin: 16px 0 32px; }
 #error { color: #b42318; margin: 0; }
 #error:empty { display: none; }
-td { overflow-wrap: anywhere; }
+.rules-list { display: grid; gap: 12px; }
+.rule-card { display: grid; gap: 10px; padding: 14px; border: 1px solid #cbd5e1; border-radius: 7px; background: #fff; }
+.rule-card-header { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
+.rule-card h3 { margin: 0; font-size: 16px; }
+.rule-card-value { margin: 0; overflow-wrap: anywhere; }
+.rule-card-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 8px 16px; }
+.rule-card-details div { display: grid; gap: 2px; }
+.rule-card-details span { color: #52606d; font-size: 12px; }
+.rule-card-actions { display: flex; justify-content: flex-end; }

@@ -1,117 +1,118 @@
 SmartWindowSize
 ===============
 
-Project repository: https://github.com/pedjas/SmartWindowSize
+SmartWindowSize keeps desktop browser windows visible on screen. You can also
+save a preferred window size, and optionally a position, for a website.
 
-Keeps desktop browser windows visible and optionally remembers their size and
-position for websites. The active tab selects the matching rule.
-Loading an inactive tab does not resize its window. Each window follows its
-own active tab even when another window has focus.
+Project page: https://github.com/pedjas/SmartWindowSize
 
-Behavior and controls
----------------------
 
-* With no rule, keep the window visible by moving it first and shrinking it
-  only when necessary. Automatic remembering is off by default.
-* Optionally apply a global default size (initially 1200 x 960) when no rule
-  matches. This does not create a website rule or modify the stored default.
-* Optionally remember user size changes using This domain and its subdomains
-  when no matching rule exists.
-* Set rules for this site opens one dialog listing all matching rules.
-  Add, Edit, and Delete are staged until Save changes; Cancel discards edits.
-  Saving immediately applies the narrowest remaining rule.
-  Add starts with Select rule scope… and requires an explicit choice before
-  adding or saving. Edit keeps the existing scope selected. There is no
-  Default rule coverage setting.
-  Confirm or cancel the inner form before Save changes. Conflicting edits or
-  a changed source URL are rejected; Reload rules discards staged changes and
-  loads rules for the original URL. Editing captures fresh window dimensions.
-  The full Source URL is always shown as ordinary text, but is not editable.
-  Opening Add or Edit scrolls the complete form into view. Reload rules is in
-  the footer next to the source-window focus button.
-  Close and reopen the dialog if the source page navigates or closes.
-  Only the first open dialog can edit; all others are completely read-only
-  and refresh automatically. Focus editable dialog brings the writer to front.
-  Closing it releases access; choose Enable editing in another dialog to edit.
-  Configuration Delete, Import and Reset are blocked while a writer is open.
-  Background size updates continue; Save still checks for conflicting changes.
-* Remember position for this rule is optional and initially off.
-* A manual resize saves only the narrowest matching rule. Manually set window
-  size uses the same behavior, with presets, Custom dimensions, Vertical,
-  Apply to current window, and Cancel. It starts with the actual window size.
-  Reopening the dialog focuses the existing instance for that window.
-* Bring window on screen is available from the toolbar right-click menu.
-  Deliberately moving off screen is allowed and may be saved; automatic
-  restoration later makes the minimum necessary correction.
-* Maximized and fullscreen windows are exempt from automatic size rules.
-* Extension enabled controls the entire extension. Per-site exclusions and
-  Disable current rule are not current user actions.
-* Configuration has Configuration, Rules, and Diagnostics tabs. Rules includes
-  descriptions and fictional URL examples. Retention offers Never.
-* About SmartWindowSize opens a single information dialog.
-  About and Configuration include Open local README, which focuses one local
-  browser tab containing this versioned installation guide.
-* Toolbar icons show enabled, disabled, or error state. The main identity icon
-  remains unchanged. Diagnostics stores session-local errors for copying.
-  The log and toolbar warning update immediately. URLs are hidden unless debug
-  is enabled. Without session storage, the log lasts for the background process.
+Getting started
+---------------
 
-Rule scopes, highest priority first
------------------------------------
+Open a website, set the browser window to the size you want, then open the
+SmartWindowSize toolbar popup.
 
-This URL — exact query parameters
-  Same origin and path, with exactly the saved parameters and values.
-This URL — non-exact query parameters
-  Same origin and path, requiring saved parameters while allowing extra ones.
-This URL — any parameters
-  Same origin and path, regardless of query parameters.
-This URL and its subpaths
-  Same origin, matching the saved path or paths below it; ignores query.
-This domain only
-  The exact hostname, with any path.
-This domain and its subdomains
-  The current hostname and its descendants, with any path.
+Choose Set rules for this site, select the coverage you want, and choose Save
+changes. The rule uses the current window size.
 
-Rules coexist; the narrowest matching rule wins. Creating a narrower rule does
-not delete broader rules. HTTP and HTTPS websites support rule creation.
-For internal browser pages, Set rules for this site is disabled in both the
-popup and toolbar context menu; normal windows still receive visibility
-protection. The popup shows Current size and the user-facing active rule name.
+When that website is opened again, SmartWindowSize restores its saved size.
 
-Install from an extension repository
-------------------------------------
 
-When published, install the Chromium package from Chrome Web Store, or the
-signed Firefox package from Mozilla Add-ons (AMO). No store listing is claimed
-by this package.
+Rules
+-----
 
-Manual local installation
--------------------------
+Rules can apply to a whole domain, one exact domain, a URL and its subpaths,
+or a URL with different levels of query-parameter matching.
 
-Chrome, Brave, Edge, Vivaldi, and compatible desktop Chromium browsers:
-1. Extract the -chrome.zip archive or use install/SmartWindowSize-chrome/.
+More specific rules take priority over broader rules. For example, a rule for
+one URL takes priority over a rule for its domain.
+
+The Set rules for this site dialog shows every rule that matches the current
+website. You can add, edit, or delete rules there. Changes are saved only when
+you choose Save changes.
+
+Remember position for this rule is optional and is off by default.
+
+When you open or switch to a website in an existing browser window, its
+current position stays unchanged. The window moves only if required to keep it
+fully visible after its saved size is applied. A newly opened browser window
+may restore its saved position.
+
+
+Window size and visibility
+--------------------------
+
+Use Manually set window size when you need exact dimensions. Choose a preset
+or Custom, enter a width and height in pixels, then apply the size.
+
+Use Bring window on screen from the toolbar right-click menu to return the
+current window to the visible desktop area. The window is moved first and is
+made smaller only if it cannot fit on the screen.
+
+Maximized and fullscreen windows are not resized automatically.
+
+
+Configuration
+-------------
+
+Configuration contains global settings, saved rules, diagnostics, and JSON
+backup and restore.
+
+Apply default size when no rule matches is optional. When it is enabled, the
+default size is used for websites that do not have a saved rule.
+
+Automatically remember sizes by domain and subdomains is also optional. When
+enabled, resizing a website that has no rule creates a domain rule.
+
+Disable Extension enabled to stop SmartWindowSize from resizing, saving, or
+moving windows. The toolbar icon becomes gray while the extension is disabled.
+
+Export JSON before removing the extension if you want to keep your saved
+rules. Reloading an installed extension keeps its settings; removing it from
+the browser deletes them.
+
+
+Manual installation
+-------------------
+
+For Chrome, Brave, Edge, Vivaldi, and compatible desktop Chromium browsers:
+
+1. Extract the SmartWindowSize-Chrome-vX.Y.Z.zip file.
+
 2. Open the browser extensions page and enable Developer mode.
-3. Choose Load unpacked and select the folder containing manifest.json.
-4. For updates, keep the same folder and reload the existing extension.
-   Removing the extension deletes its browser-local rules and settings; export
-   JSON before intentional removal when a backup is needed.
 
-Firefox:
+3. Choose Load unpacked and select the extracted folder containing
+   manifest.json.
+
+4. To update, replace the files in the same folder and use Reload on the
+   existing extension. Do not remove the extension unless you have exported a
+   backup.
+
+For Firefox:
+
 1. Open about:debugging#/runtime/this-firefox.
+
 2. Choose Load Temporary Add-on.
-3. Select manifest.json in the supplied -firefox folder.
-4. Development Gecko ID: SmartWindowSize@pedjas.
 
-Temporary Firefox installation ends when Firefox restarts. For regular use,
-install a signed package. Opera requires separate verification; Safari,
-mobile browsers, and Netscape are unsupported.
+3. Extract SmartWindowSize-Firefox-vX.Y.Z.zip and select manifest.json in the
+   extracted Firefox folder.
 
-Configuration is stored locally and can be exported/imported as JSON. Reload
-preserves this storage, while browser removal of the extension deletes it.
-No server or native messaging application is required. Display-specific
-features depend on available browser APIs. Browser creation precedes extension
-correction, so the first window position may briefly be visible before adjustment.
-Without display information, Bring attempts approximate centering and logs that
-screen visibility cannot be verified. Invalid backups do not change settings;
-successful imports refresh all Configuration controls. Concurrent changes are
-checked before saving so newer rules are not silently overwritten.
+Temporary Firefox installation ends when Firefox restarts. A regular Firefox
+installation requires a signed add-on from Mozilla Add-ons.
+
+
+Support and privacy
+-------------------
+
+SmartWindowSize keeps its settings only in your browser. It does not send
+rules, website addresses, diagnostics, window information, or personal data
+outside your browser.
+
+SmartWindowSize does not use network requests, analytics, telemetry,
+advertising, a server, or a native application.
+
+Diagnostics are local to the browser session. You can review or clear them in
+the Diagnostics tab of Configuration.
+
+For updates and release notes, see the project page and CHANGELOG.md.
