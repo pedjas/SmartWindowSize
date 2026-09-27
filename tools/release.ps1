@@ -62,7 +62,7 @@ Human-readable operation description used in failures.
 .OUTPUTS
 System.String. Trimmed standard output from the successful native command.
 #>
-function Invoke-NativeCommand {
+function Get-NativeCommandResult {
     param(
         [Parameter(Mandatory)]
         [string]$Executable,
@@ -74,15 +74,41 @@ function Invoke-NativeCommand {
         [string]$Description
     )
 
-    # Capture both streams so a failed external tool leaves actionable diagnostics for the user.
-    $output = @(& $Executable @Arguments 2>&1)
-    $exitCode = $LASTEXITCODE
-    if ($exitCode -ne 0) {
-        $details = ($output | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
-        throw "$Description failed with exit code $exitCode.`n$details"
+    # Redirect stderr so expected Git status output cannot become a PowerShell terminating error.
+    $stderrPath = Join-Path ([System.IO.Path]::GetTempPath()) "SmartWindowSize-native-$([guid]::NewGuid().ToString('N')).stderr"
+    $previousErrorActionPreference = $ErrorActionPreference
+    $stdout = @()
+    $stderr = ''
+    $exitCode = $null
+    try {
+        $ErrorActionPreference = 'Continue'
+        $PSNativeCommandUseErrorActionPreference = $false
+        $stdout = @(& $Executable @Arguments 2> $stderrPath)
+        $exitCode = $LASTEXITCODE
+        $stderr = if (Test-Path -LiteralPath $stderrPath) { Get-Content -LiteralPath $stderrPath -Raw } else { '' }
     }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+        if (Test-Path -LiteralPath $stderrPath) { Remove-Item -LiteralPath $stderrPath -Force }
+    }
+    $standardOutput = [string]::Empty + (($stdout | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine)
+    $standardError = [string]::Empty + $stderr
+    return [pscustomobject]@{ ExitCode = $exitCode; StandardOutput = $standardOutput.Trim(); StandardError = $standardError.Trim() }
+}
 
-    return (($output | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine).Trim()
+
+function Invoke-NativeCommand {
+    param(
+        [Parameter(Mandatory)][string]$Executable,
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [Parameter(Mandatory)][string]$Description
+    )
+    $result = Get-NativeCommandResult -Executable $Executable -Arguments $Arguments -Description $Description
+    if ($result.ExitCode -ne 0) {
+        $details = @($result.StandardOutput, $result.StandardError) -join [Environment]::NewLine
+        throw "$Description failed with exit code $($result.ExitCode).`n$details"
+    }
+    return $result.StandardOutput
 }
 
 
@@ -353,18 +379,14 @@ function Test-TagAvailable {
     )
 
     $safeDirectory = $ProjectRoot -replace '\\', '/'
-    & $GitPath -c "safe.directory=$safeDirectory" -C $ProjectRoot show-ref --tags --verify --quiet "refs/tags/$Tag"
-    if ($LASTEXITCODE -eq 0) {
-        throw "Local Git tag '$Tag' already exists. Release tags are never overwritten."
-    }
-
-    if ($LASTEXITCODE -ne 1) {
-        throw "Unable to check local Git tag '$Tag'."
-    }
-
+    $localTag = Get-NativeCommandResult -Executable $GitPath -Arguments @('-c', "safe.directory=$safeDirectory", '-C', $ProjectRoot, 'show-ref', '--tags', '--verify', '--quiet', "refs/tags/$Tag") -Description "Checking local Git tag '$Tag'"
+    if ($localTag.ExitCode -ne 0 -and $localTag.ExitCode -ne 1) { throw "Unable to check local Git tag '$Tag'.`n$($localTag.StandardError)" }
     $remoteTag = Invoke-RepositoryGitCommand -GitPath $GitPath -Arguments @('ls-remote', '--tags', 'origin', "refs/tags/$Tag") -Description "Checking remote Git tag '$Tag'"
-    if (-not [string]::IsNullOrWhiteSpace($remoteTag)) {
-        throw "Remote Git tag '$Tag' already exists. Release tags are never overwritten."
+    if ($localTag.ExitCode -eq 0 -or -not [string]::IsNullOrWhiteSpace($remoteTag)) {
+        $tagCommit = if ($localTag.ExitCode -eq 0) { Invoke-RepositoryGitCommand -GitPath $GitPath -Arguments @('rev-parse', "$Tag^{commit}") -Description "Reading existing release tag '$Tag'" } else { 'unavailable locally' }
+        $branchState = if ($localTag.ExitCode -eq 0) { (Get-NativeCommandResult -Executable $GitPath -Arguments @('-c', "safe.directory=$safeDirectory", '-C', $ProjectRoot, 'merge-base', '--is-ancestor', "$Tag^{commit}", "origin/$ReleaseBranch") -Description 'Checking existing release commit').ExitCode } else { -1 }
+        $onOrigin = if ($branchState -eq 0) { 'yes' } elseif ($branchState -eq 1) { 'no' } else { 'unknown' }
+        throw "Release '$Tag' is already partially or fully created. Local tag: $($localTag.ExitCode -eq 0); remote tag: $(-not [string]::IsNullOrWhiteSpace($remoteTag)); tag commit: $tagCommit; commit on origin/${ReleaseBranch}: $onOrigin. The script will not overwrite, rollback, force-push, or resume this state. Verify or create any pending Draft Release manually."
     }
 }
 
@@ -537,12 +559,12 @@ function Invoke-DryRunPreflight {
 
     # A dry run never fetches or alters remote-tracking references, so remote tag state is only reported as pending.
     $safeDirectory = $ProjectRoot -replace '\\', '/'
-    & $gitPath -c "safe.directory=$safeDirectory" -C $ProjectRoot show-ref --tags --verify --quiet "refs/tags/$tag"
-    if ($LASTEXITCODE -eq 0) {
+    $localTagResult = Get-NativeCommandResult -Executable $gitPath -Arguments @('-c', "safe.directory=$safeDirectory", '-C', $ProjectRoot, 'show-ref', '--tags', '--verify', '--quiet', "refs/tags/$tag") -Description "Checking local Git tag '$tag'"
+    if ($localTagResult.ExitCode -eq 0) {
         $warnings.Add("Real release is blocked because local tag '$tag' already exists.")
     }
-    elseif ($LASTEXITCODE -ne 1) {
-        $warnings.Add("Local tag '$tag' could not be verified.")
+    elseif ($localTagResult.ExitCode -ne 1) {
+        $warnings.Add("Local tag '$tag' could not be verified: $($localTagResult.StandardError)")
     }
 
     $ghCommand = Get-Command -Name 'gh' -ErrorAction SilentlyContinue
@@ -728,7 +750,7 @@ catch {
         Write-Host 'No release commit, tag, push, or GitHub Release was created.'
     }
 
-    Write-Error $_
+    Write-Host "$($_.Exception.Message)`n$($_.ScriptStackTrace)"
     exit 1
 }
 finally {

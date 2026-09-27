@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed
+
+- Treat successful Git commands with normal stderr status output as successful
+  and report any existing partial release state without attempting overwrite.
+
 ## 1.0.2 - 2026-09-27
 
 ### Changed
@@ -22,7 +27,6 @@
   statement.
 
 ### Fixed
-
 - Allow the first GitHub Draft Release to continue when GitHub CLI explicitly
   reports that its release tag does not exist, while retaining failures for
   every other GitHub CLI error.
