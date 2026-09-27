@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="size-picker.css">
+  <title>SmartWindowSize — Set window dimensions</title>
+</head>
+<body>
+  <main>
+    <p id="limits" aria-live="polite">Loading allowed limits…</p>
+    <form id="size-form">
+      <label>Size preset <select id="preset"></select></label>
+      <label class="vertical-option"><input id="vertical" type="checkbox"> Vertical</label>
+      <div class="dimensions">
+        <label>Width <input id="width" name="width" type="number" inputmode="numeric" step="1" required></label>
+        <span aria-hidden="true">×</span>
+        <label>Height <input id="height" name="height" type="number" inputmode="numeric" step="1" required></label>
+      </div>
+      <p id="error" class="error" role="alert"></p>
+    </form>
+  </main>
+  <footer><button id="bring-to-front" type="button" title="Bring browser window to front">⇱</button><button id="cancel" type="button">Cancel</button><button form="size-form" type="submit">Apply to current window</button></footer>
+  <script type="module" src="size-picker.js"></script>
+</body>
+</html>

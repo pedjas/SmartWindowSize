@@ -15,6 +15,7 @@ Thumbs.db
 dist/
 build/
 install/
+project-docs/
 *.crx
 *.xpi
 *.zip

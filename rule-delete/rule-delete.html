@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><link rel="stylesheet" href="rule-delete.css"><title>SmartWindowSize — Set rules for this site</title></head>
+<body>
+  <main>
+    <h1>Rules for this site</h1>
+    <p class="source"><strong>Source URL:</strong> <span id="source-url" title="Source URL for these rules"></span></p>
+    <p id="access-status" role="status"></p>
+    <div class="access-actions"><button id="focus-editor" type="button" hidden title="Bring the editable rules dialog to front">Focus editable dialog</button><button id="enable-editing" type="button" hidden title="Acquire exclusive editing access for this dialog">Enable editing</button></div>
+    <p id="error" role="alert"></p>
+    <p id="empty" hidden>No saved rules match this URL.</p>
+    <ul id="rules"></ul>
+    <button id="add" type="button">Add rule</button>
+    <form id="editor" hidden>
+      <h2 id="editor-title">Add rule</h2>
+      <label>Rule coverage <select id="selected-scope" required><option value="" disabled selected>Select rule scope…</option><option value="domain_tree">This domain and its subdomains</option><option value="domain_exact">This domain only</option><option value="url_subpaths">This URL and its subpaths</option><option value="url_any_parameters">This URL — any parameters</option><option value="url_exact_parameters">This URL — exact query parameters</option><option value="url_non_exact_parameters">This URL — non-exact query parameters</option></select></label>
+      <label class="remember"><input id="remember-position" type="checkbox"> Remember position for this rule</label>
+      <div class="editor-actions"><button id="confirm-rule" type="submit">Add rule</button><button id="cancel-edit" type="button">Cancel</button></div>
+    </form>
+  </main>
+  <footer><div class="footer-tools"><button id="bring-to-front" type="button" title="Bring browser window to front">⇱</button><button id="reload" type="button" title="Discard staged changes and reload current rules">Reload rules</button></div><button id="cancel" type="button">Cancel</button><button id="save" type="button">Save changes</button></footer>
+  <script type="module" src="rule-delete.js"></script>
+</body>
+</html>

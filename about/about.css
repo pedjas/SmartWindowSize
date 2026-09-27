@@ -1,0 +1,9 @@
+/* The information area scrolls independently of the fixed dialog footer. */
+body { font: 14px system-ui, sans-serif; margin: 0; height: 100vh; overflow: hidden; color: #172033; background: #f7f9fc; display: grid; grid-template-rows: minmax(0, 1fr) auto; }
+main { padding: 20px; display: grid; gap: 14px; overflow: auto; align-content: start; }
+h1, p { margin: 0; }
+footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid #cbd5e1; background: #eaf0f7; }
+#bring-to-front { margin-right: auto; }
+button { padding: 8px 12px; font: inherit; cursor: pointer; }
+#error { color: #b42318; }
+#error:empty { display: none; }

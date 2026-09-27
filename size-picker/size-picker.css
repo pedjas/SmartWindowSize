@@ -1,0 +1,15 @@
+/* Only the dimension form scrolls; its dialog actions remain visible. */
+body { font: 14px system-ui, sans-serif; margin: 0; height: 100vh; overflow: hidden; color: #172033; background: #f7f9fc; display: grid; grid-template-rows: minmax(0, 1fr) auto; }
+main { max-width: 520px; width: 100%; box-sizing: border-box; margin: 0 auto; padding: 20px; overflow: auto; }
+h1 { font-size: 20px; margin: 0 0 8px; }
+h2 { font-size: 16px; margin: 0; }
+.dimensions { display: grid; grid-template-columns: 1fr auto 1fr; align-items: end; gap: 8px; }
+label { display: grid; gap: 4px; font-weight: 600; }
+input { box-sizing: border-box; min-width: 0; padding: 7px; font: inherit; }
+button { cursor: pointer; padding: 8px 10px; font: inherit; }
+footer { display: flex; gap: 8px; align-items: center; justify-content: flex-end; padding: 12px 20px; border-top: 1px solid #cbd5e1; background: #eaf0f7; }
+#bring-to-front { margin-right: auto; }
+.error { min-height: 1.25em; color: #b42318; margin: 8px 0 0; }
+.vertical-option { display: block; margin-top: 8px; font-weight: 400; }
+.vertical-option input { vertical-align: middle; }
+button:disabled { cursor: not-allowed; opacity: .5; }
