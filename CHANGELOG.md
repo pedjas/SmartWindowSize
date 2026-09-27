@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.0.2 - 2026-09-27
+
 ### Changed
 
 - Reset the application version baseline to 1.0.1 for future version
@@ -40,3 +42,4 @@
 
 - Initial version of Manifest V3 SmartWindowSize extension for desktop Chromium browsers, with a
   separate Firefox manifest package.
+
