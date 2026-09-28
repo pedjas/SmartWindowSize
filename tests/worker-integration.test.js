@@ -111,6 +111,12 @@ async function browserFixture(rules = []) {
         if (Object.keys(patch).some((key) => key !== "focused")) listeners.bounds?.(structuredClone(window));
         return structuredClone(window);
       },
+      async remove(id) {
+        if (!windows.has(id)) throw new Error("Window closed.");
+        windows.delete(id);
+        for (const [tabId, tab] of tabs) if (tab.windowId === id) tabs.delete(tabId);
+        listeners.removed?.(id);
+      },
       async create(properties) {
         await new Promise((resolve) => setImmediate(resolve));
         created += 1;
@@ -226,6 +232,19 @@ test("About and Configuration can focus one packaged local README tab", async ()
   const tabs = [...browser.tabs.values()].filter((tab) => tab.url === "chrome-extension://test/readme-viewer/readme.html");
   assert.equal(tabs.length, 1);
   assert.equal(tabs[0].active, true);
+});
+
+
+test("closing a source browser window closes its dependent dialogs but not Configuration", async () => {
+  const browser = await browserFixture();
+  await browser.dispatch({ type: "open-rule-editor", tabId: 1 });
+  await browser.dispatch({ type: "open-size-picker", tabId: 1 });
+  await browser.dispatch({ type: "open-about", tabId: 1 });
+  const dialogWindowIds = [...browser.windows.values()].filter((window) => window.id !== 7).map((window) => window.id);
+  assert.equal(dialogWindowIds.length, 3);
+  await chrome.windows.remove(7);
+  await browser.settle();
+  for (const dialogWindowId of dialogWindowIds) assert.equal(browser.windows.has(dialogWindowId), false);
 });
 
 

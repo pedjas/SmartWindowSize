@@ -41,6 +41,8 @@ test("custom dimensions survive checkbox toggles, Save, and fallback resolution"
     form.elements.automaticWindowSize.listeners.change();
     assert.equal(form.elements.Width.disabled, !checked);
     assert.equal(form.elements.Height.disabled, !checked);
+    assert.equal(defaultPreset.disabled, !checked);
+    assert.equal(context.defaultVertical.disabled, !checked);
     assert.equal(form.elements.Width.value, "1377");
     assert.equal(form.elements.Height.value, "877");
   }

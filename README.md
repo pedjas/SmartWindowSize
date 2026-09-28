@@ -19,10 +19,12 @@ With the extension enabled and no matching rule, the window is kept visible:
 its position is corrected first, and its size is reduced only if necessary.
 Sizes are not remembered automatically by default.
 
-- **Automatically set window size if no rules** optionally applies Width and
-  Height to a newly opened window when its website has no saved rule. Its
-  initial size is 1200 × 960. Applying it does not create a website rule or
-  change Width and Height when the screen is smaller.
+- **Automatically set window size if no rules** optionally applies the saved
+  Configuration Width and Height to a newly opened window when its website has
+  no saved rule. A completely new Configuration begins at 1200 × 960, but your
+  saved Width and Height always replace those initial values. Applying it does
+  not create a website rule or change the saved values when the screen is
+  smaller.
 - Maximized and fullscreen windows are exempt from automatic resizing and
   saving. Rules are reconsidered when the window returns to normal.
 
@@ -59,8 +61,10 @@ using a Public Suffix List.
 2. Open the toolbar popup or right-click menu and choose **Set rules for this site**.
 3. The dialog lists all matching rules, narrowest first, with the active rule
    in bold. Choose **Add rule**, **Edit**, or the delete button.
-4. Choose a scope and optionally **Remember position for this rule**. Position
-   saving is off by default. The editor captures the current window dimensions.
+4. Choose a scope and optionally **Remember position for this rule** and
+   **Remember monitor for this rule**. Both are off by default. Monitor
+   remembering saves the display currently used by this rule; the editor
+   captures the current window dimensions.
 5. Choose **Save changes** to save the complete set of changes and immediately
    apply the narrowest remaining rule. **Cancel** discards the edits.
 
@@ -137,10 +141,12 @@ this correction. The resulting size and optional position are saved under the
 normal rule-saving conditions. With multiple displays, the current target
 display is selected by the greatest overlap.
 
-Optional monitor remembering uses display information when supported.
-Unavailable display APIs limit monitor-specific behavior. The extension acts
-after the browser creates a window, so a brief initial off-screen appearance
-can occur before correction.
+**Remember monitor for this rule** is a per-rule option. When enabled, a newly
+opened browser window uses the display saved with that rule when the display is
+available. If it is unavailable, SmartWindowSize uses an available display,
+preferably the primary one. Unavailable display APIs limit monitor-specific
+behavior. The extension acts after the browser creates a window, so a brief
+initial off-screen appearance can occur before correction.
 Without display data, Bring attempts approximate centering and records that
 screen visibility cannot be verified. It does not claim a verified correction.
 
@@ -157,13 +163,19 @@ About opens a single dialog containing the name, version, purpose, and OK button
 Configuration has three tabs:
 
 - **Configuration**: global enable switch, optional automatic window size, rule
-  retention, monitor preference, and JSON backup/import/reset.
+  retention, and JSON backup/import/reset.
 - **Rules**: saved rules with scope, value, size, Remember position, position as
   `x,y`, status, last update, and Delete. An empty list says **No rules defined**.
   **Rule scopes description** links to the explanations below the table.
   Editing from this general list is deferred; use the site dialog to edit.
 - **Diagnostics**: session-local errors with copy and clear actions. The tab
   turns red when errors are present.
+
+In the **Configuration** tab, the automatic no-rule size controls are one
+group directly below **Extension enabled**. First enable **Automatically set
+window size if no rules**. Then select a **Window size preset** and optional
+**Vertical** orientation, or enter a custom **Width** and **Height**. These
+four dependent controls are unavailable while automatic sizing is off.
 
 Both **Configuration** and **About SmartWindowSize** provide **Open local
 README**. It opens one internal browser tab that displays the versioned

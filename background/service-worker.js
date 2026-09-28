@@ -1,5 +1,5 @@
 /**
- * SmartWindowSize | Version: 1.0.17 | Last updated: 2026-09-28 16:16:03 +02:00
+ * SmartWindowSize | Version: 1.0.21 | Last updated: 2026-09-28 16:39:09 +02:00
  *
  * Coordinates serialized window operations, validated configuration writes,
  * unique dialogs, and session diagnostics.
@@ -38,6 +38,9 @@ const activeTabs = new Map();
 
 /** In-flight unique-dialog opens, keyed by the dialog identity. @type {Map<string, Promise<unknown>>} */
 const dialogOpens = new Map();
+
+/** Serializes session-backed ownership changes for auxiliary dialog windows. @type {Promise<unknown>} */
+let dependentDialogQueue = Promise.resolve();
 
 /** Serializes editor ownership and manual rule mutations across all dialogs. @type {Promise<unknown>} */
 let editorQueue = Promise.resolve();
@@ -113,6 +116,37 @@ function inWindow(id, operation) {
   windowQueues.set(id, work);
   work.finally(() => { if (windowQueues.get(id) === work) windowQueues.delete(id); }).catch(() => undefined);
   return work;
+}
+
+
+/** Updates the session-backed map of auxiliary dialog window IDs to their source browser window IDs. @param {(registry: Record<string, number>) => unknown|Promise<unknown>} operation Serialized registry operation. @returns {Promise<unknown>} Operation result. */
+function withDependentDialogs(operation) {
+  const work = dependentDialogQueue.catch(() => undefined).then(async () => {
+    const registry = await readSession("dependentDialogs") ?? {};
+    const result = await operation(registry);
+    await writeSession("dependentDialogs", registry);
+    return result;
+  });
+  dependentDialogQueue = work;
+  return work;
+}
+
+
+/** Records that an auxiliary dialog belongs to one browser window. @param {number|undefined} sourceWindowId Source browser window ID. @param {number} dialogWindowId Popup dialog window ID. @returns {Promise<void>} Completion. */
+async function registerDependentDialog(sourceWindowId, dialogWindowId) {
+  if (!Number.isInteger(sourceWindowId)) return;
+  await withDependentDialogs((registry) => { registry[dialogWindowId] = sourceWindowId; });
+}
+
+
+/** Removes one closed dialog and returns every dialog whose source browser window has just closed. @param {number} windowId Closed browser or dialog window ID. @returns {Promise<number[]>} Dependent dialog IDs to close. */
+async function takeDependentDialogsForClosedWindow(windowId) {
+  return withDependentDialogs((registry) => {
+    const dependent = Object.entries(registry).filter(([, sourceWindowId]) => sourceWindowId === windowId).map(([dialogWindowId]) => Number(dialogWindowId));
+    delete registry[windowId];
+    for (const dialogWindowId of dependent) delete registry[dialogWindowId];
+    return dependent;
+  });
 }
 
 
@@ -331,8 +365,8 @@ async function handleBoundsChanged(window, owner, ownChange) {
 }
 
 
-/** Focuses an existing dialog or creates exactly one instance even for concurrent clicks. @param {string} key Dialog identity. @param {string} url Dialog URL. @param {number} width Outer width. @param {number} height Outer height. @returns {Promise<object>} Created or focused browser window. */
-async function openUniqueDialog(key, url, width, height) {
+/** Focuses an existing dialog or creates exactly one instance even for concurrent clicks. @param {string} key Dialog identity. @param {string} url Dialog URL. @param {number} width Outer width. @param {number} height Outer height. @param {number|undefined} sourceWindowId Browser window that owns this auxiliary dialog. @returns {Promise<object>} Created or focused browser window. */
+async function openUniqueDialog(key, url, width, height, sourceWindowId = undefined) {
   if (dialogOpens.has(key)) return dialogOpens.get(key);
   const work = (async () => {
     const windows = await chrome.windows.getAll({ populate: true });
@@ -341,7 +375,11 @@ async function openUniqueDialog(key, url, width, height) {
     return chrome.windows.create({ url, type: "popup", width, height, focused: true });
   })();
   dialogOpens.set(key, work);
-  try { return await work; } finally { dialogOpens.delete(key); }
+  try {
+    const dialog = await work;
+    await registerDependentDialog(sourceWindowId, dialog.id);
+    return dialog;
+  } finally { dialogOpens.delete(key); }
 }
 
 
@@ -437,7 +475,7 @@ async function dispatchAction(message, sender, registry) {
   }
   if (message.type === "open-about") {
     const owner = await sourceTab(message, sender).catch(() => null);
-    await openUniqueDialog("about", `${chrome.runtime.getURL("about/about.html")}?tabId=${owner?.id ?? ""}`, 420, 340);
+    await openUniqueDialog("about", `${chrome.runtime.getURL("about/about.html")}?tabId=${owner?.id ?? ""}`, 420, 340, owner?.windowId);
     return { ok: true };
   }
   if (message.type === "open-local-readme") {
@@ -460,7 +498,7 @@ async function dispatchAction(message, sender, registry) {
   if (message.type === "open-rule-editor") {
     await requireEditorSource(tab);
     const dialogUrl = `${chrome.runtime.getURL("rule-delete/rule-delete.html")}?tabId=${tab.id}`;
-    const window = await openUniqueDialog(`rules:${tab.id}`, dialogUrl, 640, 620);
+    const window = await openUniqueDialog(`rules:${tab.id}`, dialogUrl, 640, 620, tab.windowId);
     const dialog = (await chrome.tabs.query({ windowId: window.id })).find((candidate) => candidate.url === dialogUrl || candidate.pendingUrl === dialogUrl);
     if (!dialog) throw new Error("The rule dialog could not be initialized.");
     if (!registry.entries[dialog.id]) {
@@ -472,7 +510,7 @@ async function dispatchAction(message, sender, registry) {
   if (message.type === "open-size-picker") {
     if (!(await loadConfig()).global.enabled) throw new Error("SmartWindowSize is disabled.");
     if (!tab) throw new Error("The source window is no longer available.");
-    await openUniqueDialog(`size:${tab.windowId}`, `${chrome.runtime.getURL("size-picker/size-picker.html")}?windowId=${tab.windowId}`, 440, 460);
+    await openUniqueDialog(`size:${tab.windowId}`, `${chrome.runtime.getURL("size-picker/size-picker.html")}?windowId=${tab.windowId}`, 440, 460, tab.windowId);
     return { ok: true };
   }
   if (message.type === "get-window-size-limits") {
@@ -624,6 +662,8 @@ chrome.windows.onBoundsChanged.addListener((window) => {
   handleBoundsChanged(window, owner ? { ...owner } : null, changingWindows.has(window.id) || initializingWindows.has(window.id)).catch((error) => reportDiagnostic("Process window bounds", error));
 });
 chrome.windows.onRemoved.addListener((id) => {
+  takeDependentDialogsForClosedWindow(id).then((dialogWindowIds) => Promise.all(dialogWindowIds.map((dialogWindowId) =>
+    chrome.windows.remove(dialogWindowId).catch((error) => reportDiagnostic("Close dependent dialog", error))))).catch((error) => reportDiagnostic("Release dependent dialogs", error));
   withEditors((registry) => {
     for (const [tabId, entry] of Object.entries(registry.entries)) if (entry.windowId === id) delete registry.entries[tabId];
     if (!registry.entries[registry.owner]) registry.owner = null;

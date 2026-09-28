@@ -19,6 +19,26 @@ changes. The rule uses the current window size.
 When that website is opened again, SmartWindowSize restores its saved size.
 
 
+Configuration
+-------------
+
+Configuration contains global settings, saved rules, diagnostics, and JSON
+backup and restore.
+
+Disable Extension enabled to stop SmartWindowSize from resizing, saving, or
+moving windows. The toolbar icon becomes gray while the extension is disabled.
+
+Automatically set window size if no rules is optional. When it is enabled,
+Width and Height are applied to a newly opened window for a website that has
+no saved rule. It does not create a rule.
+
+Export JSON before removing the extension if you want to keep your saved
+rules. Reloading an installed extension keeps its settings; removing it from
+
+Click Save settings after changing the size. Manual input selects Custom.
+Toggling automatic sizing keeps the entered dimensions.
+
+
 Rules
 -----
 
@@ -32,7 +52,11 @@ The Set rules for this site dialog shows every rule that matches the current
 website. You can add, edit, or delete rules there. Changes are saved only when
 you choose Save changes.
 
-Remember position for this rule is optional and is off by default.
+Remember position for this rule and Remember monitor for this rule are optional
+and are off by default. Remember monitor saves the display currently used by
+the rule. When the rule opens in a new browser window, SmartWindowSize uses
+that display if it is available. Otherwise, it uses an available display,
+preferably the primary one.
 
 When you open or switch to a website in an existing browser window, its
 current position stays unchanged. The window moves only if required to keep it
@@ -51,27 +75,6 @@ current window to the visible desktop area. The window is moved first and is
 made smaller only if it cannot fit on the screen.
 
 Maximized and fullscreen windows are not resized automatically.
-
-
-Configuration
--------------
-
-Configuration contains global settings, saved rules, diagnostics, and JSON
-backup and restore.
-
-Automatically set window size if no rules is optional. When it is enabled,
-Width and Height are applied to a newly opened window for a website that has
-no saved rule. It does not create a rule.
-
-Enter Width and Height or choose a preset, then click Save settings. Manual
-input selects Custom. Toggling automatic sizing keeps the entered dimensions.
-
-Disable Extension enabled to stop SmartWindowSize from resizing, saving, or
-moving windows. The toolbar icon becomes gray while the extension is disabled.
-
-Export JSON before removing the extension if you want to keep your saved
-rules. Reloading an installed extension keeps its settings; removing it from
-the browser deletes them.
 
 
 Manual installation

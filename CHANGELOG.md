@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- Close auxiliary dialogs when their source browser window is closed.
+- Group no-rule automatic sizing controls in Configuration and disable every
+  dependent control while automatic sizing is off.
 - Rename persisted automatic no-rule dimensions to `automaticWidth` and
   `automaticHeight`, preserving existing users' dimensions through schema
   migration.
@@ -30,6 +33,10 @@
 
 ### Changed
 
+- Document per-rule monitor remembering and its unavailable-display fallback in
+  the packaged user guide.
+- Group the Configuration automatic no-rule sizing controls below Extension
+  enabled, including the preset, Vertical, Width, and Height controls.
 - Moved the **Remember monitor** setting from global Configuration to each
   individual rule, displayed its state in the rule list, and added per-rule
   enable or disable controls.

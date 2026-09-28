@@ -15,3 +15,7 @@ body { font: 15px system-ui, sans-serif; color: #18212f; background: #f8fafc; ma
 .default-dimensions { display: flex; gap: 12px; }
 .default-dimensions label { flex: 0 0 auto; }
 .default-dimensions input { width: 8ch; box-sizing: border-box; }
+.automatic-window-size { display: grid; gap: 12px; margin: 0; padding: 14px; border: 1px solid #93c5fd; border-radius: 7px; background: #eff6ff; }
+.automatic-window-size legend { padding: 0 6px; font-weight: 600; }
+.automatic-window-size legend label { font-weight: inherit; }
+.preset-row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }

@@ -123,6 +123,8 @@ function selectedDefaultPreset() {
 /** Updates field availability without replacing unsaved dimensions. @returns {void} */
 function synchronizeDimensionAvailability() {
   const dimensionsEnabled = form.elements.automaticWindowSize.checked;
+  defaultPreset.disabled = !dimensionsEnabled;
+  defaultVertical.disabled = !dimensionsEnabled;
   form.elements.Width.disabled = !dimensionsEnabled;
   form.elements.Height.disabled = !dimensionsEnabled;
 }
