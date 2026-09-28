@@ -2,8 +2,6 @@
 
 ## Unreleased
 
-## 1.0.21 - 2026-09-28
-
 ### Fixed
 
 - Close auxiliary dialogs when their source browser window is closed.
