@@ -14,13 +14,20 @@ with its matching origin branch before this script changes any local file.
 .PARAMETER DryRun
 Builds and validates temporary browser packages without modifying CHANGELOG.md,
 Git history, the project install/ directory, a remote, or GitHub.
+
+.PARAMETER SimulateFailureAfterChangelog
+Tests pre-commit cleanup by stopping immediately after CHANGELOG.md is locally
+finalized. This test-only switch never creates a release commit, tag, push, or
+GitHub Release.
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [string]$ReleaseBranch = 'master',
 
-    [switch]$DryRun
+    [switch]$DryRun,
+
+    [switch]$SimulateFailureAfterChangelog
 )
 
 <# Strict mode prevents incomplete preflight results from being treated as valid release state. #>
@@ -44,6 +51,18 @@ $ReleaseNotesPath = $null
 
 <# The temporary package root used only by a dry run and removed when it completes. #>
 $DryRunInstallRoot = $null
+
+<# The successful release preflight, retained for pre-commit cleanup after a failure. #>
+$preflight = $null
+
+<# The original changelog captured before local finalization, available for a safe pre-commit restore. #>
+$OriginalChangelogContent = $null
+
+<# Whether this invocation rewrote CHANGELOG.md before creating a release commit. #>
+$ChangelogFinalized = $false
+
+<# Whether the release commit exists and therefore prohibits automatic local rollback. #>
+$ReleaseCommitCreated = $false
 
 
 <#
@@ -358,6 +377,41 @@ function Write-FinalizedChangelog {
 
 <#
 .SYNOPSIS
+Restores the exact pre-release changelog and clears its release staging entry.
+
+.DESCRIPTION
+Runs only before a release commit exists. Preflight requires a clean tree, so
+restoring this one file cannot discard unrelated user work.
+
+.PARAMETER GitPath
+Resolved Git executable used with this repository.
+
+.PARAMETER ChangelogPath
+Root changelog path that was locally finalized.
+
+.PARAMETER OriginalContent
+Complete changelog text captured before finalization.
+#>
+function Restore-UncommittedChangelog {
+    param(
+        [Parameter(Mandatory)]
+        [string]$GitPath,
+
+        [Parameter(Mandatory)]
+        [string]$ChangelogPath,
+
+        [Parameter(Mandatory)]
+        [string]$OriginalContent
+    )
+
+    # Restore the captured bytes before changing the index, so a failed Git call still leaves readable source text.
+    [System.IO.File]::WriteAllText($ChangelogPath, $OriginalContent, [System.Text.UTF8Encoding]::new($false))
+    Invoke-RepositoryGitCommand -GitPath $GitPath -Arguments @('restore', '--staged', '--', 'CHANGELOG.md') -Description 'Unstaging restored changelog' | Out-Null
+}
+
+
+<#
+.SYNOPSIS
 Checks whether a local or remote tag already exists without changing Git history.
 
 .PARAMETER GitPath
@@ -648,9 +702,48 @@ function Confirm-ReleasePackages {
 }
 
 
+<#
+.SYNOPSIS
+Removes the dedicated temporary package directory used by a release dry run.
+
+.PARAMETER Path
+The generated dry-run directory expected directly under the system temporary directory.
+
+.OUTPUTS
+None. Throws when the path is unsafe or cannot be removed completely.
+#>
+function Remove-DryRunArtifacts {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    # Restrict cleanup to this invocation's named child of the system temporary directory.
+    $temporaryRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
+    $candidatePath = [System.IO.Path]::GetFullPath($Path)
+    $temporaryPrefix = $temporaryRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+    $candidateName = Split-Path -Leaf $candidatePath
+
+    if (-not $candidatePath.StartsWith($temporaryPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or -not $candidateName.StartsWith('SmartWindowSize-release-dry-run-', [System.StringComparison]::Ordinal)) {
+        throw "Refusing to remove an unexpected dry-run artifact path: $candidatePath"
+    }
+
+    if (Test-Path -LiteralPath $candidatePath) {
+        Remove-Item -LiteralPath $candidatePath -Recurse -Force
+    }
+
+    if (Test-Path -LiteralPath $candidatePath) {
+        throw "Dry-run artifacts could not be removed completely: $candidatePath"
+    }
+}
+
+
 try {
     if ($DryRun -and $WhatIfPreference) {
         throw 'Use either -DryRun or -WhatIf, not both.'
+    }
+    if ($SimulateFailureAfterChangelog -and ($DryRun -or $WhatIfPreference)) {
+        throw 'SimulateFailureAfterChangelog requires a real-release preflight and cannot be combined with DryRun or WhatIf.'
     }
 
     if ($DryRun) {
@@ -690,8 +783,14 @@ try {
 
     # This is the first local mutation, reached only after every safety check above succeeds.
     $releaseDate = Get-Date -Format 'yyyy-MM-dd'
+    $OriginalChangelogContent = $preflight.Unreleased.Content
     Write-FinalizedChangelog -ChangelogPath $preflight.ChangelogPath -Unreleased $preflight.Unreleased -Version $preflight.Version -ReleaseDate $releaseDate
+    $ChangelogFinalized = $true
     $CompletedSteps.Add('CHANGELOG.md finalized locally (not committed)')
+
+    if ($SimulateFailureAfterChangelog) {
+        throw 'Simulated failure after CHANGELOG.md finalization. The original changelog should now be restored.'
+    }
 
     & $preflight.BuildScriptPath -Target all
 
@@ -708,6 +807,7 @@ try {
 
     Invoke-RepositoryGitCommand -GitPath $preflight.GitPath -Arguments @('var', 'GIT_AUTHOR_IDENT') -Description 'Checking Git commit identity' | Out-Null
     Invoke-RepositoryGitCommand -GitPath $preflight.GitPath -Arguments @('commit', '-m', "Release $($preflight.Tag)") -Description 'Creating release commit' | Out-Null
+    $ReleaseCommitCreated = $true
     $CompletedSteps.Add('Release commit created')
 
     Invoke-RepositoryGitCommand -GitPath $preflight.GitPath -Arguments @('tag', '-a', $preflight.Tag, '-m', "Release $($preflight.Tag)") -Description 'Creating release tag' | Out-Null
@@ -740,6 +840,17 @@ try {
     Write-Host 'Review and publish the Draft Release manually on GitHub.'
 }
 catch {
+    $releaseFailure = $_
+    $restoreMessage = $null
+    if ($ChangelogFinalized -and -not $ReleaseCommitCreated -and $null -ne $preflight -and $null -ne $OriginalChangelogContent) {
+        try {
+            Restore-UncommittedChangelog -GitPath $preflight.GitPath -ChangelogPath $preflight.ChangelogPath -OriginalContent $OriginalChangelogContent
+            $restoreMessage = 'CHANGELOG.md was restored to its pre-release content and removed from staging.'
+        }
+        catch {
+            $restoreMessage = "WARNING: CHANGELOG.md could not be restored automatically: $($_.Exception.Message)"
+        }
+    }
     Write-Host ''
     Write-Host 'RELEASE STOPPED'
     if ($CompletedSteps.Count -gt 0) {
@@ -750,7 +861,8 @@ catch {
         Write-Host 'No release commit, tag, push, or GitHub Release was created.'
     }
 
-    Write-Host "$($_.Exception.Message)`n$($_.ScriptStackTrace)"
+    if ($null -ne $restoreMessage) { Write-Host $restoreMessage }
+    Write-Host "$($releaseFailure.Exception.Message)`n$($releaseFailure.ScriptStackTrace)"
     exit 1
 }
 finally {
@@ -758,7 +870,7 @@ finally {
         Remove-Item -LiteralPath $ReleaseNotesPath -Force
     }
 
-    if ($null -ne $DryRunInstallRoot -and (Test-Path -LiteralPath $DryRunInstallRoot)) {
-        Remove-Item -LiteralPath $DryRunInstallRoot -Recurse -Force
+    if ($null -ne $DryRunInstallRoot) {
+        Remove-DryRunArtifacts -Path $DryRunInstallRoot
     }
 }

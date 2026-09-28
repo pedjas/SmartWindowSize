@@ -2,10 +2,24 @@
 
 ## Unreleased
 
+### Changed
+
+- Require an explicit user request before package generation, release dry-run,
+  release preflight, or a real release is started.
+
+### Fixed
+
+- Rebuild only the controlled same-version Chrome and Firefox ZIP artifacts
+  instead of stopping when those ZIP names already exist.
+- Remove all temporary dry-run package artifacts and fail visibly if their
+  dedicated temporary directory cannot be cleaned up.
+
 ## 1.0.21 - 2026-09-28
 
 ### Fixed
 
+- Restore the original changelog and remove its staging entry when a release
+  stops before its release commit is created.
 - Close auxiliary dialogs when their source browser window is closed.
 - Group no-rule automatic sizing controls in Configuration and disable every
   dependent control while automatic sizing is off.
