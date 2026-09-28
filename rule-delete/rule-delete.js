@@ -65,6 +65,7 @@ const scopeInput = document.querySelector("#selected-scope");
 
 /** Position-persistence checkbox inside the rule editor. @type {HTMLInputElement} */
 const positionInput = document.querySelector("#remember-position");
+const monitorInput = document.querySelector("#remember-monitor");
 
 
 /** Recalculates the active staged rule from the shared coverage priority. @returns {void} Updates the bold row state. */
@@ -90,7 +91,7 @@ function render() {
     title.textContent = `${labels[rule.scope.type]} — ${rule.width} × ${rule.height}`;
     const position = document.createElement("span");
     position.className = "details";
-    position.textContent = rule.position?.enabled ? `Remember position: Yes (${rule.position.x},${rule.position.y})` : "Remember position: No";
+    position.textContent = `${rule.position?.enabled ? `Remember position: Yes (${rule.position.x},${rule.position.y})` : "Remember position: No"} · Remember monitor: ${rule.display?.enabled ? "Yes" : "No"}`;
     details.append(title, position);
     const coverage = document.createElement("span");
     coverage.className = "details";
@@ -131,7 +132,8 @@ function openEditor(rule = null) {
   editingRuleId = rule?.id ?? null;
   scopeInput.value = rule?.scope.type ?? "";
   positionInput.checked = rule?.position?.enabled === true;
-  editorBaseline = { scope: scopeInput.value, rememberPosition: positionInput.checked };
+  monitorInput.checked = rule?.display?.enabled === true;
+  editorBaseline = { scope: scopeInput.value, rememberPosition: positionInput.checked, rememberMonitor: monitorInput.checked };
   document.querySelector("#editor-title").textContent = rule ? "Edit rule" : "Add rule";
   document.querySelector("#confirm-rule").textContent = rule ? "Update rule" : "Add rule";
   document.querySelector("#confirm-rule").title = rule ? "Update this staged rule using the current window size" : "Add a staged rule using the current window size";
@@ -157,7 +159,7 @@ function closeEditor() {
 function hasUnsavedChanges() {
   const normalized = (rules) => [...rules].sort((left, right) => left.id.localeCompare(right.id));
   const rulesChanged = JSON.stringify(normalized(state?.rules ?? [])) !== JSON.stringify(normalized(baseRules));
-  const editorChanged = !editor.hidden && editorBaseline !== null && (scopeInput.value !== editorBaseline.scope || positionInput.checked !== editorBaseline.rememberPosition);
+  const editorChanged = !editor.hidden && editorBaseline !== null && (scopeInput.value !== editorBaseline.scope || positionInput.checked !== editorBaseline.rememberPosition || monitorInput.checked !== editorBaseline.rememberMonitor);
   return rulesChanged || editorChanged;
 }
 
@@ -181,7 +183,7 @@ function synchronizeScopeSelection() {
 
 /** Samples current source-window bounds and creates a staged rule. @param {object|null} existing Existing staged rule, if any. @returns {Promise<object>} Rule ready for staging, not yet persisted. */
 async function ruleFromEditor(existing) {
-  const response = await request({ type: "prepare-site-rule", tabId, url: state.url, scope: scopeInput.value, rememberPosition: positionInput.checked, existing });
+  const response = await request({ type: "prepare-site-rule", tabId, url: state.url, scope: scopeInput.value, rememberPosition: positionInput.checked, rememberMonitor: monitorInput.checked, existing });
   return response.rule;
 }
 

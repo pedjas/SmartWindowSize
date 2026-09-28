@@ -4,8 +4,28 @@
 
 ### Fixed
 
+- Map **Automatically set window size if no rules** to the global default-size
+  behavior, so custom Width and Height values are applied instead of the
+  previous 1200 × 960 default.
+- Enable Configuration `Width` and `Height` whenever automatic no-rule window
+  sizing is enabled, including when a preset is selected.
+- Treat a stale **Set rules for this site** dialog as an expected visible state
+  rather than adding it to Diagnostics.
+- Simplified Configuration default-size labels and aligned the two dimension
+  fields in one row.
+- Renamed the automatic no-rule sizing option for clearer Configuration text.
+- Kept the extension-manager icon neutral instead of showing the in-extension
+  diagnostic flag as the browser's default extension icon.
 - Treat successful Git commands with normal stderr status output as successful
   and report any existing partial release state without attempting overwrite.
+
+### Changed
+
+- Moved the **Remember monitor** setting from global Configuration to each
+  individual rule, displayed its state in the rule list, and added per-rule
+  enable or disable controls.
+- Added `tools\\make-install.bat` as the stable launcher for the existing
+  installation-package procedure.
 
 ## 1.0.2 - 2026-09-27
 

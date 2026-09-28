@@ -105,6 +105,9 @@ function renderGlobal() {
     if (control.type === "checkbox") control.checked = value;
     else control.value = value;
   }
+  form.elements.Width.value = config.global.defaultWidth;
+  form.elements.Height.value = config.global.defaultHeight;
+  form.elements.automaticWindowSize.checked = config.global.useDefaultSize;
   renderDefaultPresets(true);
   formDirty = false;
 }
@@ -117,16 +120,16 @@ function selectedDefaultPreset() {
 }
 
 
-/** Enables Custom inputs only when a standard preset is not selected. @returns {void} */
+/** Synchronizes default dimensions with the selected preset and automatic-sizing state. @returns {void} */
 function synchronizeDefaultPreset() {
   const preset = selectedDefaultPreset();
-  const custom = preset === null;
-  form.elements.defaultWidth.disabled = !custom;
-  form.elements.defaultHeight.disabled = !custom;
+  const dimensionsEnabled = form.elements.automaticWindowSize.checked;
+  form.elements.Width.disabled = !dimensionsEnabled;
+  form.elements.Height.disabled = !dimensionsEnabled;
   if (!preset) return;
   const size = orientedPresetSize(preset, defaultVertical.checked);
-  form.elements.defaultWidth.value = size.width;
-  form.elements.defaultHeight.value = size.height;
+  form.elements.Width.value = size.width;
+  form.elements.Height.value = size.height;
 }
 
 
@@ -193,17 +196,23 @@ function renderRules() {
     details.append(
       createRuleDetail("Size", `${rule.width} × ${rule.height}`),
       createRuleDetail("Remember position", rule.position.enabled ? "Yes" : "No"),
+      createRuleDetail("Remember monitor", rule.display.enabled ? "Yes" : "No"),
       createRuleDetail("Position", rule.position.enabled ? `${rule.position.x},${rule.position.y}` : ""),
       createRuleDetail("Last updated", new Date(rule.lastUpdatedAt).toLocaleDateString())
     );
     const actions = document.createElement("div");
     actions.className = "rule-card-actions";
+    const toggle = document.createElement("button");
+    toggle.textContent = rule.enabled ? "Disable" : "Enable";
+    toggle.title = `${toggle.textContent} this saved rule`;
+    toggle.disabled = rulesLocked;
+    toggle.addEventListener("click", () => mutate({ type: "set-rule-enabled", ruleId: rule.id, enabled: !rule.enabled, base: rule }));
     const remove = document.createElement("button");
     remove.textContent = "Delete";
     remove.title = "Delete this saved rule";
     remove.disabled = rulesLocked;
     remove.addEventListener("click", () => mutate({ type: "delete-rule", ruleId: rule.id, base: rule }));
-    actions.append(remove);
+    actions.append(toggle, remove);
     card.append(header, value, details, actions);
     return card;
   }));
@@ -227,14 +236,16 @@ async function mutate(message, refreshForm = false) {
 form.addEventListener("submit", (event) => {
   event.preventDefault();
   const global = { ...globalBase };
-  for (const [key, value] of new FormData(form)) global[key] = ["defaultWidth", "defaultHeight", "ruleRetentionDays"].includes(key) ? Number(value) : value;
-  global.defaultWidth = Number(form.elements.defaultWidth.value);
-  global.defaultHeight = Number(form.elements.defaultHeight.value);
-  for (const name of ["enabled", "useDefaultSize", "autoRememberByDomainTree", "rememberMonitor"]) {
+  for (const [key, value] of new FormData(form)) if (key !== "automaticWindowSize") global[key] = ["ruleRetentionDays"].includes(key) ? Number(value) : value;
+  global.defaultWidth = Number(form.elements.Width.value);
+  global.defaultHeight = Number(form.elements.Height.value);
+  global.useDefaultSize = form.elements.automaticWindowSize.checked;
+  for (const name of ["enabled", "rememberMonitor"]) {
     if (form.elements[name]) global[name] = form.elements[name].checked;
   }
   mutate({ type: "save-global-settings", global, base: globalBase }, true);
 });
+form.elements.automaticWindowSize.addEventListener("change", synchronizeDefaultPreset);
 document.querySelector("#export").addEventListener("click", () => runClientAction("Export configuration", async () => {
   const latest = (await request({ type: "get-configuration" })).config;
   const url = URL.createObjectURL(new Blob([JSON.stringify(latest, null, 2)], { type: "application/json" }));

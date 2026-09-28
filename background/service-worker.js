@@ -1,5 +1,5 @@
 /**
- * SmartWindowSize | Version: 1.0.3 | Last updated: 2026-09-27 20:25:00 +02:00
+ * SmartWindowSize | Version: 1.0.13 | Last updated: 2026-09-28 15:35:03 +02:00
  *
  * Coordinates serialized window operations, validated configuration writes,
  * unique dialogs, and session diagnostics.
@@ -78,6 +78,12 @@ function editorRecord(registry, sender, message) {
   const entry = registry.entries[sender.tab?.id];
   if (!entry || entry.dialogUrl !== sender.tab.url || entry.sourceId !== message.tabId) throw new Error("Reopen this rule dialog from its source page.");
   return entry;
+}
+
+
+/** Identifies an expected stale rule-editor request that must remain visible but not diagnostic. @param {object} message Request envelope. @param {unknown} error Rejected operation. @returns {boolean} Whether the condition is expected. */
+function isExpectedStaleEditorRequest(message, error) {
+  return message?.type === "get-rule-editor-state" && error?.message === "Reopen this rule dialog from its source page.";
 }
 
 
@@ -247,9 +253,7 @@ async function applyForTab(tab, useSavedPosition = false) {
         fingerprint(resolveRule(tab.url ?? "", currentConfig)) === fingerprint(resolved);
     };
     if (!await canApply()) return;
-    const appliedResolution = resolved.rule && !config.global.rememberMonitor
-      ? { ...resolved, rule: { ...resolved.rule, display: { enabled: false, id: null } } } : resolved;
-    const application = await changeWindow(tab.windowId, () => applyResolvedRule(tab.windowId, appliedResolution, canApply, useSavedPosition));
+    const application = await changeWindow(tab.windowId, () => applyResolvedRule(tab.windowId, resolved, canApply, useSavedPosition));
     if (resolved.status === "RULE" && application.sizeAdjusted) {
       await updateConfig((latest) => {
         const current = resolveRule(tab.url, latest);
@@ -366,7 +370,7 @@ async function requireEditorSource(tab, url) {
 
 /** Validates and executes one background action without requiring a tab for global actions. @param {object} message Request. @param {object} sender Browser sender. @returns {Promise<object>} Response. */
 async function dispatchRequest(message, sender = {}) {
-  const coordinated = ["open-rule-editor", "get-rule-editor-state", "enable-rule-editing", "focus-rule-editor", "prepare-site-rule", "save-site-rules", "get-configuration", "delete-rule", "import-configuration", "reset-configuration"];
+  const coordinated = ["open-rule-editor", "get-rule-editor-state", "enable-rule-editing", "focus-rule-editor", "prepare-site-rule", "save-site-rules", "get-configuration", "delete-rule", "set-rule-enabled", "import-configuration", "reset-configuration"];
   if (coordinated.includes(message.type)) return withEditors((registry) => dispatchAction(message, sender, registry));
   return dispatchAction(message, sender);
 }
@@ -418,7 +422,7 @@ async function dispatchAction(message, sender, registry) {
     await scheduleIconRefresh();
     return { ok: true };
   }
-  if (["save-global-settings", "delete-rule", "import-configuration", "reset-configuration"].includes(message.type)) {
+  if (["save-global-settings", "delete-rule", "set-rule-enabled", "import-configuration", "reset-configuration"].includes(message.type)) {
     if (message.type !== "save-global-settings" && registry.owner !== null) throw new Error("Close the editable rule dialog before deleting, importing, or resetting rules.");
     const config = await updateConfig((current) => applyConfigurationAction(current, message));
     return { ok: true, config };
@@ -500,7 +504,7 @@ async function dispatchAction(message, sender, registry) {
     return { rule: { id: existing?.id ?? createRuleId(), scope: { type, value }, enabled: existing?.enabled ?? true,
       width: current.width, height: current.height,
       position: message.rememberPosition ? { enabled: true, x: current.left, y: current.top } : { enabled: false, x: null, y: null },
-      display: config.global.rememberMonitor && display ? { enabled: true, id: display.id } : existing?.display ?? { enabled: false, id: null },
+      display: message.rememberMonitor && display ? { enabled: true, id: display.id } : { enabled: false, id: null },
       lastUpdatedAt: new Date().toISOString() } };
   }
   if (message.type === "save-site-rules") {
@@ -520,7 +524,7 @@ async function dispatchAction(message, sender, registry) {
         candidate.rules = candidate.rules.map((rule) => changedIds.has(rule.id) ? {
           ...rule, width: window.width, height: window.height,
           position: rule.position.enabled ? { enabled: true, x: window.left, y: window.top } : rule.position,
-          display: config.global.rememberMonitor && display ? { enabled: true, id: display.id } : rule.display,
+          display: rule.display.enabled && display ? { enabled: true, id: display.id } : rule.display,
           lastUpdatedAt: new Date().toISOString()
         } : rule);
         return candidate;
@@ -538,7 +542,7 @@ async function dispatchAction(message, sender, registry) {
 function handleExtensionRequest(message, sender, sendResponse) {
   if (["diagnostics-changed", "rule-editors-changed"].includes(message.type)) return;
   dispatchRequest(message, sender).then(sendResponse).catch(async (error) => {
-    await reportDiagnostic(message.type ?? "Handle extension request", error);
+    if (!isExpectedStaleEditorRequest(message, error)) await reportDiagnostic(message.type ?? "Handle extension request", error);
     sendResponse({ ok: false, error: error.message });
   });
   return true;

@@ -59,11 +59,9 @@ Configuration
 Configuration contains global settings, saved rules, diagnostics, and JSON
 backup and restore.
 
-Apply default size when no rule matches is optional. When it is enabled, the
-default size is used for websites that do not have a saved rule.
-
-Automatically remember sizes by domain and subdomains is also optional. When
-enabled, resizing a website that has no rule creates a domain rule.
+Automatically set window size if no rules is optional. When it is enabled, the
+configured default size is used for websites that do not have a saved rule.
+It does not create a rule.
 
 Disable Extension enabled to stop SmartWindowSize from resizing, saving, or
 moving windows. The toolbar icon becomes gray while the extension is disabled.

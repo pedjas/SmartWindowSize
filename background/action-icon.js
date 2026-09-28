@@ -102,7 +102,7 @@ export async function updateActionIcon(tabId, resolved, hasDiagnostics = false) 
   try {
     await chrome.action.setTitle({ tabId, title: active ? `SmartWindowSize ${APP_VERSION}: enabled` : `SmartWindowSize ${APP_VERSION}: disabled` });
   } catch (error) {
-    failures.push({ operation: "Set toolbar title", error });
+    if (!/No tab with id/i.test(error.message)) failures.push({ operation: "Set toolbar title", error });
   }
   return failures;
 }
@@ -118,9 +118,9 @@ export async function updateDefaultActionIcon(enabled, hasDiagnostics = false) {
   const failures = [];
   try {
     try {
-      await chrome.action.setIcon({ imageData: await iconImageData(enabled, enabled && hasDiagnostics) });
+      await chrome.action.setIcon({ imageData: await iconImageData(enabled, false) });
     } catch {
-      await chrome.action.setIcon({ path: absoluteIconPaths(enabled, enabled && hasDiagnostics) });
+      await chrome.action.setIcon({ path: absoluteIconPaths(enabled, false) });
     }
   } catch (error) {
     failures.push({ operation: "Apply default toolbar icon", error });

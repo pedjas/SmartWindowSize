@@ -34,6 +34,13 @@ export function applyConfigurationAction(config, message) {
     requireUnchanged(current, message.base);
     return { ...config, rules: config.rules.filter((rule) => rule.id !== message.ruleId) };
   }
+  if (message.type === "set-rule-enabled") {
+    const current = config.rules.find((rule) => rule.id === message.ruleId);
+    if (!current) return config;
+    requireUnchanged(current, message.base);
+    if (typeof message.enabled !== "boolean") throw new Error("Invalid rule enabled state.");
+    return { ...config, rules: config.rules.map((rule) => rule.id === current.id ? { ...rule, enabled: message.enabled } : rule) };
+  }
   if (message.type === "import-configuration" || message.type === "reset-configuration") {
     requireUnchanged(config, message.base);
     return message.type === "reset-configuration" ? createDefaultConfig() : validateConfigImport(message.config);

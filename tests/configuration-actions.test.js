@@ -71,16 +71,12 @@ test("legacy backup migrates without retaining the obsolete default coverage", (
 });
 
 
-test("automatic remembering is opt-in and never writes internal URLs or disabled scopes", () => {
+test("resizing without a matching rule never creates a rule", () => {
   const config = createDefaultConfig();
   assert.equal(updateRuleForResize(config, { url: "https://alpha.example/" }, 900, 700).changed, false);
   config.global.autoRememberByDomainTree = true;
   assert.equal(updateRuleForResize(config, { url: "brave://extensions/" }, 900, 700).changed, false);
-  const added = updateRuleForResize(config, { url: "https://alpha.example/" }, 900, 700);
-  assert.equal(added.rule.scope.type, "domain_tree");
-  assert.ok(added.rule.lastUpdatedAt);
-  added.config.rules[0].enabled = false;
-  assert.equal(updateRuleForResize(added.config, { url: "https://alpha.example/" }, 1000, 800).changed, false);
+  assert.equal(updateRuleForResize(config, { url: "https://alpha.example/" }, 900, 700).changed, false);
 });
 
 

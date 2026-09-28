@@ -1,9 +1,7 @@
 /**
  * Updates the narrowest matching rule without changing its identity or coverage.
- * Resize handlers and toolbar actions share opt-in creation and retention logic.
+ * Resize handlers and toolbar actions preserve only existing matching rules.
  */
-import { createRuleId } from "./config.js";
-import { scopeForUrl } from "./rule-matcher.js";
 import { resolveRule } from "./rule-resolver.js";
 
 
@@ -12,31 +10,19 @@ export function updateRuleForResize(config, context, width, height) {
   if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) throw new Error("Invalid window size.");
   const resolved = resolveRule(context.url, config);
   if (resolved.status === "DISABLED") return { config, rule: null, changed: false };
-  const type = resolved.rule?.scope.type ?? "domain_tree";
-  const value = resolved.rule?.scope.value ?? scopeForUrl(context.url, type);
-  if (!value) return { config, rule: null, changed: false };
   const index = resolved.rule ? config.rules.findIndex((rule) => rule.id === resolved.rule.id) : -1;
+  if (index < 0) return { config, rule: null, changed: false };
   const next = structuredClone(config);
   const patch = { width, height, lastUpdatedAt: new Date().toISOString() };
   const currentPositionEnabled = index >= 0 && next.rules[index].position.enabled;
   if (context.position && currentPositionEnabled) patch.position = { enabled: true, x: context.position.x, y: context.position.y };
   if (context.displayId && next.global.rememberMonitor) patch.display = { enabled: true, id: context.displayId };
-  if (index >= 0) {
-    const current = next.rules[index];
-    const samePosition = !patch.position || current.position.enabled === patch.position.enabled && current.position.x === patch.position.x && current.position.y === patch.position.y;
-    const sameDisplay = !patch.display || current.display.enabled === patch.display.enabled && current.display.id === patch.display.id;
-    if (current.width === width && current.height === height && samePosition && sameDisplay) return { config, rule: current, changed: false };
-    next.rules[index] = { ...next.rules[index], ...patch };
-    return { config: next, rule: next.rules[index], changed: true };
-  }
-  if (!config.global.autoRememberByDomainTree) return { config, rule: null, changed: false };
-  const rule = {
-    id: createRuleId(), scope: { type, value }, enabled: true, width, height,
-    position: patch.position ?? { enabled: false, x: null, y: null },
-    display: patch.display ?? { enabled: false, id: null }, lastUpdatedAt: patch.lastUpdatedAt
-  };
-  next.rules.push(rule);
-  return { config: next, rule, changed: true };
+  const current = next.rules[index];
+  const samePosition = !patch.position || current.position.enabled === patch.position.enabled && current.position.x === patch.position.x && current.position.y === patch.position.y;
+  const sameDisplay = !patch.display || current.display.enabled === patch.display.enabled && current.display.id === patch.display.id;
+  if (current.width === width && current.height === height && samePosition && sameDisplay) return { config, rule: current, changed: false };
+  next.rules[index] = { ...next.rules[index], ...patch };
+  return { config: next, rule: next.rules[index], changed: true };
 }
 
 /** Deletes one persisted rule by its stable identifier. @param {object} config Normalized configuration. @param {string} ruleId Stable identifier to remove. @returns {{config: object, changed: boolean}} Updated configuration result. */

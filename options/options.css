@@ -11,3 +11,7 @@ body { font: 15px system-ui, sans-serif; color: #18212f; background: #f8fafc; ma
 .rule-card-details div { display: grid; gap: 2px; }
 .rule-card-details span { color: #52606d; font-size: 12px; }
 .rule-card-actions { display: flex; justify-content: flex-end; }
+/* Keeps the related custom default dimensions compact and aligned. */
+.default-dimensions { display: flex; gap: 12px; }
+.default-dimensions label { flex: 0 0 auto; }
+.default-dimensions input { width: 8ch; box-sizing: border-box; }

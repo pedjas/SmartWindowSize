@@ -9,12 +9,10 @@
 <div id="configuration-panel">
 <form id="global"><h2>Global settings</h2>
 <label><input type="checkbox" name="enabled"> Extension enabled</label>
-<label><input type="checkbox" name="useDefaultSize"> Apply default size when no rule matches</label>
 <label>Default preset <select id="default-preset"></select></label>
 <label class="vertical-option"><input id="default-vertical" type="checkbox"> Vertical</label>
-<label>Default width <input type="number" name="defaultWidth" min="320"></label>
-<label>Default height <input type="number" name="defaultHeight" min="240"></label>
-<label><input type="checkbox" name="autoRememberByDomainTree"> Automatically remember sizes by domain and subdomains if no rules</label><label>Delete rules older than <select name="ruleRetentionDays"><option value="-1">Never</option><option value="90">90 days</option><option value="180">180 days</option><option value="365">365 days</option><option value="730">730 days</option></select></label><label><input type="checkbox" name="rememberMonitor"> Remember monitor</label><button>Save settings</button></form>
+<label><input type="checkbox" name="automaticWindowSize"> Automatically set window size if no rules</label><div class="default-dimensions"><label>Width <input type="number" name="Width" min="320"></label><label>Height <input type="number" name="Height" min="240"></label></div>
+<label>Delete rules older than <select name="ruleRetentionDays"><option value="-1">Never</option><option value="90">90 days</option><option value="180">180 days</option><option value="365">365 days</option><option value="730">730 days</option></select></label><button>Save settings</button></form>
 <section><h2>Backup</h2><button id="export">Export JSON</button><label>Import JSON <input id="import" type="file" accept="application/json"></label><button id="reset">Reset all configuration</button></section>
 <section><h2>Help</h2><button id="open-readme" type="button">Open local README</button></section>
 </div>

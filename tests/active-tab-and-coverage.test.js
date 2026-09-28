@@ -126,7 +126,7 @@ function element() {
 /** Loads the real rule-editor script with a staged saved rule and no persistent writes. @param {object} access Mutable server state overrides. @returns {Promise<object>} Controls, requests and an edit entry point. */
 async function ruleEditorFixture(access = {}) {
   const controls = new Map();
-  for (const id of ["rules", "empty", "add", "editor", "selected-scope", "remember-position", "editor-title", "confirm-rule", "cancel-edit", "save", "cancel", "bring-to-front", "reload", "error", "source-url", "access-status", "focus-editor", "enable-editing"]) controls.set(id, element());
+  for (const id of ["rules", "empty", "add", "editor", "selected-scope", "remember-position", "remember-monitor", "editor-title", "confirm-rule", "cancel-edit", "save", "cancel", "bring-to-front", "reload", "error", "source-url", "access-status", "focus-editor", "enable-editing"]) controls.set(id, element());
   controls.get("editor").hidden = true;
   const rule = fixtureRule();
   const requests = [];

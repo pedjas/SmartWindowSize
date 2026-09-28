@@ -49,7 +49,6 @@ import { scopeForUrl } from "./rule-matcher.js";
  * @property {boolean} enabled Global extension switch.
  * @property {number} defaultWidth Fallback window width in pixels.
  * @property {number} defaultHeight Fallback window height in pixels.
- * @property {boolean} autoRememberByDomainTree Whether manual resizes without a rule create a domain-tree rule.
  * @property {number} ruleRetentionDays Enabled-rule retention period in days.
  * @property {boolean} rememberMonitor Whether the browser display is saved.
  * @property {boolean} debug Whether local diagnostic output is enabled.
@@ -74,7 +73,6 @@ export const DEFAULT_GLOBAL = Object.freeze({
   useDefaultSize: false,
   defaultWidth: 1200,
   defaultHeight: 960,
-  autoRememberByDomainTree: false,
   ruleRetentionDays: 180,
   rememberMonitor: false,
 
@@ -102,11 +100,11 @@ export function normalizeConfig(input) {
   // Remove obsolete default-coverage preferences without discarding saved rules.
   delete global.defaultRememberType;
   delete global.defaultScope;
+  delete global.autoRememberByDomainTree;
   global.defaultWidth = isPositiveInteger(global.defaultWidth) ? global.defaultWidth : DEFAULT_GLOBAL.defaultWidth;
   global.defaultHeight = isPositiveInteger(global.defaultHeight) ? global.defaultHeight : DEFAULT_GLOBAL.defaultHeight;
   global.enabled = Boolean(global.enabled);
   global.useDefaultSize = Boolean(global.useDefaultSize);
-  global.autoRememberByDomainTree = Boolean(global.autoRememberByDomainTree);
   global.ruleRetentionDays = [-1, 90, 180, 365, 730].includes(global.ruleRetentionDays) ? global.ruleRetentionDays : DEFAULT_GLOBAL.ruleRetentionDays;
   global.rememberMonitor = Boolean(global.rememberMonitor);
   global.debug = Boolean(global.debug);
@@ -190,7 +188,7 @@ export function createRuleId() {
 export function validateConfigImport(input) {
   if (!input || typeof input !== "object" || !input.global || typeof input.global !== "object" || Array.isArray(input.global) || !Array.isArray(input.rules) ||
       !Number.isInteger(input.schemaVersion) || input.schemaVersion < 1 || input.schemaVersion > CONFIG_SCHEMA_VERSION) throw new Error("Invalid or unsupported configuration backup.");
-  for (const key of ["enabled", "useDefaultSize", "autoRememberByDomainTree", "rememberMonitor", "debug"]) {
+  for (const key of ["enabled", "useDefaultSize", "rememberMonitor", "debug"]) {
     if (key in input.global && typeof input.global[key] !== "boolean") throw new Error(`Invalid setting: ${key}.`);
   }
   for (const key of ["defaultWidth", "defaultHeight"]) {

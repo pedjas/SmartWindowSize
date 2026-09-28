@@ -19,12 +19,10 @@ With the extension enabled and no matching rule, the window is kept visible:
 its position is corrected first, and its size is reduced only if necessary.
 Sizes are not remembered automatically by default.
 
-- **Apply default size when no rule matches** optionally applies the configured
-  default size. Its initial value is 1200 × 960. Applying it does not create a
-  website rule or change the saved default when the screen is smaller.
-- **Automatically remember sizes by domain and subdomains** optionally creates
-  a **This domain and its subdomains** rule after a user changes a window that
-  has no matching rule.
+- **Automatically set window size if no rules** optionally applies the
+  configured default size. Its initial value is 1200 × 960. Applying it does
+  not create a website rule or change the saved default when the screen is
+  smaller.
 - Maximized and fullscreen windows are exempt from automatic resizing and
   saving. Rules are reconsidered when the window returns to normal.
 
@@ -158,8 +156,8 @@ About opens a single dialog containing the name, version, purpose, and OK button
 
 Configuration has three tabs:
 
-- **Configuration**: global enable switch, optional default size, automatic
-  remembering, rule retention, monitor preference, and JSON backup/import/reset.
+- **Configuration**: global enable switch, optional default size, rule
+  retention, monitor preference, and JSON backup/import/reset.
 - **Rules**: saved rules with scope, value, size, Remember position, position as
   `x,y`, status, last update, and Delete. An empty list says **No rules defined**.
   **Rule scopes description** links to the explanations below the table.
@@ -218,8 +216,3 @@ the complete Configuration form. Concurrent settings changes are checked before
 saving, and rule updates from other windows are preserved. Diagnostics updates
 live and hides URLs unless debug is enabled. When session storage is unavailable,
 the temporary log and window state last only for the background process lifetime.
-
-Private project documentation defines behavior, development process, runtime
-requirements, and current manual checks. The handoff is historical and
-must not override those documents. Package creation is performed only when
-explicitly requested, using `tools/package-extension.ps1`.

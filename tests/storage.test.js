@@ -42,9 +42,16 @@ globalThis.chrome = createChromeStorageMock();
 const { updateConfig, loadConfig, replaceConfig } = await import("../core/storage.js");
 
 
+/** Builds one persisted domain-tree rule for concurrent resize-update tests. @param {string} host Rule hostname. @returns {object} Rule fixture. */
+function savedRule(host) {
+  return { id: host, scope: { type: "domain_tree", value: host }, enabled: true, width: 800, height: 600,
+    position: { enabled: false, x: null, y: null }, display: { enabled: false, id: null }, lastUpdatedAt: new Date().toISOString() };
+}
+
+
 test("concurrent resize saves retain rules for both domains", async () => {
   storedConfiguration = undefined;
-  await updateConfig((config) => ({ ...config, global: { ...config.global, autoRememberByDomainTree: true } }));
+  await updateConfig((config) => ({ ...config, rules: [savedRule("first.example"), savedRule("second.example")] }));
 
   await Promise.all([
     updateConfig((config) => updateRuleForResize(config, { url: "https://first.example/", selectedScope: "domain_tree" }, 1100, 700).config),
