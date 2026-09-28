@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.0.21 - 2026-09-28
+
 ### Fixed
 
 - Close auxiliary dialogs when their source browser window is closed.
@@ -18,7 +20,7 @@
   sizing; manual input selects Custom instead of retaining a stale preset.
 - Map **Automatically set window size if no rules** to the global default-size
   behavior, so custom Width and Height values are applied instead of the
-  previous 1200 Ă— 960 default.
+  previous 1200 Ä‚â€” 960 default.
 - Enable Configuration `Width` and `Height` whenever automatic no-rule window
   sizing is enabled, including when a preset is selected.
 - Treat a stale **Set rules for this site** dialog as an expected visible state
@@ -82,5 +84,6 @@
 
 - Initial version of Manifest V3 SmartWindowSize extension for desktop Chromium browsers, with a
   separate Firefox manifest package.
+
 
 
