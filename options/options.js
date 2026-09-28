@@ -105,8 +105,8 @@ function renderGlobal() {
     if (control.type === "checkbox") control.checked = value;
     else control.value = value;
   }
-  form.elements.Width.value = config.global.defaultWidth;
-  form.elements.Height.value = config.global.defaultHeight;
+  form.elements.Width.value = config.global.automaticWidth;
+  form.elements.Height.value = config.global.automaticHeight;
   form.elements.automaticWindowSize.checked = config.global.useDefaultSize;
   renderDefaultPresets(true);
   formDirty = false;
@@ -120,12 +120,18 @@ function selectedDefaultPreset() {
 }
 
 
-/** Synchronizes default dimensions with the selected preset and automatic-sizing state. @returns {void} */
-function synchronizeDefaultPreset() {
-  const preset = selectedDefaultPreset();
+/** Updates field availability without replacing unsaved dimensions. @returns {void} */
+function synchronizeDimensionAvailability() {
   const dimensionsEnabled = form.elements.automaticWindowSize.checked;
   form.elements.Width.disabled = !dimensionsEnabled;
   form.elements.Height.disabled = !dimensionsEnabled;
+}
+
+
+/** Applies an explicitly selected preset and updates field availability. @returns {void} */
+function synchronizeDefaultPreset() {
+  const preset = selectedDefaultPreset();
+  synchronizeDimensionAvailability();
   if (!preset) return;
   const size = orientedPresetSize(preset, defaultVertical.checked);
   form.elements.Width.value = size.width;
@@ -135,8 +141,8 @@ function synchronizeDefaultPreset() {
 
 /** Builds the shared preset dropdown, optionally initializing it from the saved default. @param {boolean} fromSavedDefault Whether to select the persisted dimensions. @returns {void} */
 function renderDefaultPresets(fromSavedDefault = false) {
-  const horizontalIndex = findHorizontalPresetIndex(config.global.defaultWidth, config.global.defaultHeight);
-  const verticalIndex = findHorizontalPresetIndex(config.global.defaultHeight, config.global.defaultWidth);
+  const horizontalIndex = findHorizontalPresetIndex(config.global.automaticWidth, config.global.automaticHeight);
+  const verticalIndex = findHorizontalPresetIndex(config.global.automaticHeight, config.global.automaticWidth);
   const previousValue = defaultPreset.value;
   if (fromSavedDefault) defaultVertical.checked = verticalIndex >= 0 && horizontalIndex < 0;
   defaultPreset.replaceChildren();
@@ -160,6 +166,9 @@ defaultVertical.addEventListener("change", () => {
 /** Applies the selected default preset without persisting until the form is saved. */
 defaultPreset.addEventListener("change", synchronizeDefaultPreset);
 form.addEventListener("input", () => { formDirty = true; });
+for (const control of [form.elements.Width, form.elements.Height]) {
+  control.addEventListener("input", () => { defaultPreset.value = "custom"; });
+}
 form.addEventListener("change", () => { formDirty = true; });
 
 
@@ -237,15 +246,15 @@ form.addEventListener("submit", (event) => {
   event.preventDefault();
   const global = { ...globalBase };
   for (const [key, value] of new FormData(form)) if (key !== "automaticWindowSize") global[key] = ["ruleRetentionDays"].includes(key) ? Number(value) : value;
-  global.defaultWidth = Number(form.elements.Width.value);
-  global.defaultHeight = Number(form.elements.Height.value);
+  global.automaticWidth = Number(form.elements.Width.value);
+  global.automaticHeight = Number(form.elements.Height.value);
   global.useDefaultSize = form.elements.automaticWindowSize.checked;
   for (const name of ["enabled", "rememberMonitor"]) {
     if (form.elements[name]) global[name] = form.elements[name].checked;
   }
   mutate({ type: "save-global-settings", global, base: globalBase }, true);
 });
-form.elements.automaticWindowSize.addEventListener("change", synchronizeDefaultPreset);
+form.elements.automaticWindowSize.addEventListener("change", synchronizeDimensionAvailability);
 document.querySelector("#export").addEventListener("click", () => runClientAction("Export configuration", async () => {
   const latest = (await request({ type: "get-configuration" })).config;
   const url = URL.createObjectURL(new Blob([JSON.stringify(latest, null, 2)], { type: "application/json" }));

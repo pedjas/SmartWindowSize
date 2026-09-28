@@ -203,13 +203,16 @@ test("Reload confirms only when staged rules or editor fields have changed", asy
 });
 
 
-test("schema migration removes default coverage preferences without changing saved rules", () => {
+test("schema migration renames automatic dimensions and removes legacy preferences without changing saved rules", () => {
   const rule = fixtureRule();
-  const migrated = normalizeConfig({ schemaVersion: 4, global: { defaultRememberType: "page", defaultScope: "path", defaultWidth: 1400 }, rules: [rule] });
-  assert.equal(migrated.schemaVersion, 5);
+  const migrated = normalizeConfig({ schemaVersion: 4, global: { defaultRememberType: "page", defaultScope: "path", defaultWidth: 1400, defaultHeight: 900 }, rules: [rule] });
+  assert.equal(migrated.schemaVersion, 6);
   assert.equal(Object.hasOwn(migrated.global, "defaultRememberType"), false);
   assert.equal(Object.hasOwn(migrated.global, "defaultScope"), false);
-  assert.equal(migrated.global.defaultWidth, 1400);
+  assert.equal(Object.hasOwn(migrated.global, "defaultWidth"), false);
+  assert.equal(Object.hasOwn(migrated.global, "defaultHeight"), false);
+  assert.equal(migrated.global.automaticWidth, 1400);
+  assert.equal(migrated.global.automaticHeight, 900);
   assert.deepEqual(migrated.rules, [rule]);
 });
 

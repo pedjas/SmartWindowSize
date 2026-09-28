@@ -68,9 +68,9 @@ test("a concurrent migration load cannot overwrite a later configuration write",
   storedConfiguration.schemaVersion = 4;
   await Promise.all([
     loadConfig(),
-    updateConfig((config) => ({ ...config, global: { ...config.global, defaultWidth: 1450 } }))
+    updateConfig((config) => ({ ...config, global: { ...config.global, automaticWidth: 1450 } }))
   ]);
-  assert.equal(storedConfiguration.global.defaultWidth, 1450);
+  assert.equal(storedConfiguration.global.automaticWidth, 1450);
   assert.equal(storedConfiguration.rules.length, 2);
 });
 

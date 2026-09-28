@@ -1,5 +1,5 @@
 /**
- * SmartWindowSize | Version: 1.0.13 | Last updated: 2026-09-28 15:35:03 +02:00
+ * SmartWindowSize | Version: 1.0.17 | Last updated: 2026-09-28 16:16:03 +02:00
  *
  * Coordinates serialized window operations, validated configuration writes,
  * unique dialogs, and session diagnostics.
@@ -267,7 +267,7 @@ async function applyForTab(tab, useSavedPosition = false) {
 }
 
 
-/** Corrects initial placement without saving browser-created bounds as a site rule. @param {number} id New window ID. @returns {Promise<void>} Completion. */
+/** Applies automatic no-rule dimensions or visibility correction to a new window without saving a rule. @param {number} id New window ID. @returns {Promise<void>} Completion. */
 async function recoverNewWindow(id) {
   await inWindow(id, async () => {
     const window = await chrome.windows.get(id);
@@ -276,15 +276,23 @@ async function recoverNewWindow(id) {
       await writeSession(windowKey(id), { bounds: window, state: window.state });
       return;
     }
-    if (!(await loadConfig()).global.enabled) {
+    const config = await loadConfig();
+    if (!config.global.enabled) {
       await writeSession(windowKey(id), { bounds: window, state: window.state });
       return;
     }
     await changeWindow(id, async () => {
-      const display = await displayForRule(null, window);
-      if (!display) return;
-      const result = await bringWindowOnScreen(id, async () => (await loadConfig()).global.enabled);
-      if (result.changed && result.verified) {
+      const automatic = resolveRule("", config);
+      const canApplyAutomaticSize = async () => {
+        const current = await loadConfig();
+        return current.global.enabled && fingerprint(resolveRule("", current)) === fingerprint(automatic);
+      };
+      const result = automatic.status === "DEFAULT"
+        ? await applyResolvedRule(id, automatic, canApplyAutomaticSize)
+        : await bringWindowOnScreen(id, async () => (await loadConfig()).global.enabled);
+      const actual = await chrome.windows.get(id);
+      const display = await displayForRule(null, actual);
+      if (result.changed && display) {
         const key = `cascade:${display.id}`;
         const slot = await readSession(key) ?? 0;
         if (slot > 0 && (await loadConfig()).global.enabled) await chrome.windows.update(id, safeCascadePosition(result.actual, display, slot));

@@ -19,10 +19,10 @@ With the extension enabled and no matching rule, the window is kept visible:
 its position is corrected first, and its size is reduced only if necessary.
 Sizes are not remembered automatically by default.
 
-- **Automatically set window size if no rules** optionally applies the
-  configured default size. Its initial value is 1200 × 960. Applying it does
-  not create a website rule or change the saved default when the screen is
-  smaller.
+- **Automatically set window size if no rules** optionally applies Width and
+  Height to a newly opened window when its website has no saved rule. Its
+  initial size is 1200 × 960. Applying it does not create a website rule or
+  change Width and Height when the screen is smaller.
 - Maximized and fullscreen windows are exempt from automatic resizing and
   saving. Rules are reconsidered when the window returns to normal.
 
@@ -156,7 +156,7 @@ About opens a single dialog containing the name, version, purpose, and OK button
 
 Configuration has three tabs:
 
-- **Configuration**: global enable switch, optional default size, rule
+- **Configuration**: global enable switch, optional automatic window size, rule
   retention, monitor preference, and JSON backup/import/reset.
 - **Rules**: saved rules with scope, value, size, Remember position, position as
   `x,y`, status, last update, and Delete. An empty list says **No rules defined**.

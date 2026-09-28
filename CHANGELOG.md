@@ -4,6 +4,15 @@
 
 ### Fixed
 
+- Rename persisted automatic no-rule dimensions to `automaticWidth` and
+  `automaticHeight`, preserving existing users' dimensions through schema
+  migration.
+- Apply Configuration Width and Height immediately to a new normal window
+  without a URL when automatic no-rule sizing is enabled.
+- Clarify Configuration so Width and Height belong only to automatic sizing
+  for new windows without a matching rule.
+- Preserve manually entered Configuration dimensions when toggling automatic
+  sizing; manual input selects Custom instead of retaining a stale preset.
 - Map **Automatically set window size if no rules** to the global default-size
   behavior, so custom Width and Height values are applied instead of the
   previous 1200 × 960 default.

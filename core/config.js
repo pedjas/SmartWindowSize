@@ -47,8 +47,8 @@ import { scopeForUrl } from "./rule-matcher.js";
  * Shared extension behavior and fallback window dimensions.
  * @typedef {object} GlobalSettings
  * @property {boolean} enabled Global extension switch.
- * @property {number} defaultWidth Fallback window width in pixels.
- * @property {number} defaultHeight Fallback window height in pixels.
+ * @property {number} automaticWidth No-rule automatic window width in pixels.
+ * @property {number} automaticHeight No-rule automatic window height in pixels.
  * @property {number} ruleRetentionDays Enabled-rule retention period in days.
  * @property {boolean} rememberMonitor Whether the browser display is saved.
  * @property {boolean} debug Whether local diagnostic output is enabled.
@@ -64,15 +64,15 @@ import { scopeForUrl } from "./rule-matcher.js";
  */
 
 /** Schema version used to identify the normalized storage format. @type {number} */
-export const CONFIG_SCHEMA_VERSION = 5;
+export const CONFIG_SCHEMA_VERSION = 6;
 
 
 /** Immutable default values copied into every new configuration. @type {Readonly<GlobalSettings>} */
 export const DEFAULT_GLOBAL = Object.freeze({
   enabled: true,
   useDefaultSize: false,
-  defaultWidth: 1200,
-  defaultHeight: 960,
+  automaticWidth: 1200,
+  automaticHeight: 960,
   ruleRetentionDays: 180,
   rememberMonitor: false,
 
@@ -95,14 +95,20 @@ export function isPositiveInteger(value) {
 /** Normalizes untrusted persisted or imported configuration data. @param {unknown} input Candidate configuration. @returns {object} Valid current-schema configuration. */
 export function normalizeConfig(input) {
   const source = input && typeof input === "object" ? input : {};
-  const global = { ...DEFAULT_GLOBAL, ...(source.global ?? {}) };
+  const sourceGlobal = source.global && typeof source.global === "object" ? source.global : {};
+  const global = { ...DEFAULT_GLOBAL, ...sourceGlobal };
 
   // Remove obsolete default-coverage preferences without discarding saved rules.
   delete global.defaultRememberType;
   delete global.defaultScope;
   delete global.autoRememberByDomainTree;
-  global.defaultWidth = isPositiveInteger(global.defaultWidth) ? global.defaultWidth : DEFAULT_GLOBAL.defaultWidth;
-  global.defaultHeight = isPositiveInteger(global.defaultHeight) ? global.defaultHeight : DEFAULT_GLOBAL.defaultHeight;
+  // Migrate former ambiguous default-size keys without discarding a user's saved dimensions.
+  global.automaticWidth = isPositiveInteger(sourceGlobal.automaticWidth) ? sourceGlobal.automaticWidth :
+    (isPositiveInteger(sourceGlobal.defaultWidth) ? sourceGlobal.defaultWidth : DEFAULT_GLOBAL.automaticWidth);
+  global.automaticHeight = isPositiveInteger(sourceGlobal.automaticHeight) ? sourceGlobal.automaticHeight :
+    (isPositiveInteger(sourceGlobal.defaultHeight) ? sourceGlobal.defaultHeight : DEFAULT_GLOBAL.automaticHeight);
+  delete global.defaultWidth;
+  delete global.defaultHeight;
   global.enabled = Boolean(global.enabled);
   global.useDefaultSize = Boolean(global.useDefaultSize);
   global.ruleRetentionDays = [-1, 90, 180, 365, 730].includes(global.ruleRetentionDays) ? global.ruleRetentionDays : DEFAULT_GLOBAL.ruleRetentionDays;
@@ -191,8 +197,8 @@ export function validateConfigImport(input) {
   for (const key of ["enabled", "useDefaultSize", "rememberMonitor", "debug"]) {
     if (key in input.global && typeof input.global[key] !== "boolean") throw new Error(`Invalid setting: ${key}.`);
   }
-  for (const key of ["defaultWidth", "defaultHeight"]) {
-    if (key in input.global && (!Number.isInteger(input.global[key]) || input.global[key] < (key === "defaultWidth" ? 320 : 240))) throw new Error(`Invalid setting: ${key}.`);
+  for (const key of ["automaticWidth", "automaticHeight"]) {
+    if (key in input.global && (!Number.isInteger(input.global[key]) || input.global[key] < (key === "automaticWidth" ? 320 : 240))) throw new Error(`Invalid setting: ${key}.`);
   }
   if ("ruleRetentionDays" in input.global && ![-1, 90, 180, 365, 730].includes(input.global.ruleRetentionDays)) throw new Error("Invalid rule retention period.");
   const ids = new Set();

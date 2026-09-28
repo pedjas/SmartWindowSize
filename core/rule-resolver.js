@@ -24,7 +24,7 @@ export function resolveRule(url, config) {
     status: "DEFAULT",
     reason: "no-matching-rule",
     rule: null,
-    size: { width: config.global.defaultWidth, height: config.global.defaultHeight }
+    size: { width: config.global.automaticWidth, height: config.global.automaticHeight }
   };
 }
 

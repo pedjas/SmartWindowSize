@@ -284,11 +284,24 @@ test("session window state reapplies a rule after leaving maximized mode", async
 
 test("default sizing and extension-generated bounds cannot create or overwrite rules", async () => {
   const browser = await browserFixture();
-  Object.assign(browser.local.smartWindowSizeConfig.global, { useDefaultSize: true, defaultWidth: 1600, defaultHeight: 1200, autoRememberByDomainTree: true });
+  Object.assign(browser.local.smartWindowSizeConfig.global, { useDefaultSize: true, automaticWidth: 1600, automaticHeight: 1200, autoRememberByDomainTree: true });
   await browser.apply(browser.tabs.get(1));
   await browser.settle();
   assert.equal(browser.windows.get(7).height, 1080);
-  assert.equal(browser.local.smartWindowSizeConfig.global.defaultHeight, 1200);
+  assert.equal(browser.local.smartWindowSizeConfig.global.automaticHeight, 1200);
+  assert.equal(browser.local.smartWindowSizeConfig.rules.length, 0);
+});
+
+
+test("automatic Configuration dimensions apply to a new window before it receives a URL", async () => {
+  const browser = await browserFixture();
+  Object.assign(browser.local.smartWindowSizeConfig.global, { useDefaultSize: true, automaticWidth: 1377, automaticHeight: 877 });
+  const blank = { id: 8, type: "normal", state: "normal", left: 100, top: 100, width: 1200, height: 960 };
+  browser.windows.set(blank.id, blank);
+  browser.listeners.created(structuredClone(blank));
+  await browser.settle();
+  assert.equal(browser.windows.get(blank.id).width, 1377);
+  assert.equal(browser.windows.get(blank.id).height, 877);
   assert.equal(browser.local.smartWindowSizeConfig.rules.length, 0);
 });
 

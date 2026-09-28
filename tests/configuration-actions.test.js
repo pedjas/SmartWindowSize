@@ -51,7 +51,7 @@ test("invalid backups reject before normalization can silently discard data", ()
     {},
     { ...valid, schemaVersion: 900 },
     { ...valid, global: { ...valid.global, enabled: "false" } },
-    { ...valid, global: { ...valid.global, defaultWidth: 0 } },
+    { ...valid, global: { ...valid.global, automaticWidth: 0 } },
     { ...valid, rules: [...valid.rules, valid.rules[0]] },
     { ...valid, rules: [{ ...valid.rules[0], position: { enabled: true, x: null, y: 20 } }] },
     { ...valid, rules: [{ ...valid.rules[0], scope: { type: "domain_tree", value: "https://wrong.example" } }] },
