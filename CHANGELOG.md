@@ -4,11 +4,51 @@
 
 ### Changed
 
+- Keep Firefox toolbar actions flat by omitting only decorative separators,
+  avoiding Firefox's automatic SmartWindowSize overflow submenu.
+- Add a Firefox-only `Options` toolbar context-menu action and make extension
+  pages follow the browser or system color scheme.
 - Require an explicit user request before package generation, release dry-run,
   release preflight, or a real release is started.
 
 ### Fixed
 
+- Preserve browser-neutral rule application through active-tab navigation while
+  a Rules editor session exists, with regression coverage for source-window
+  targeting and non-matching URLs.
+- Save Rules through its token-bound editor session even when Firefox keeps
+  focus on the editor popup or another source-window tab is active.
+- Treat Firefox's initial `about:blank` Rules popup tab as the reserved editor
+  until its token-bound page handshake finishes, preventing false dialog
+  initialization failures and duplicate popups.
+- Preserve the complete local technical cause, browser-operation phase, and
+  captured source/editor context when Firefox cannot initialize a Rules
+  dialog, while keeping the short user-facing error message.
+- Recover a Rules editor created just before Firefox suspends its MV3 event
+  page by matching the persisted token to the live extension dialog tab.
+- Validate the captured source tab, window, URL, and token together, without
+  using the currently active tab as evidence for an already-open editor.
+- Accept legitimate token-bound Set Rules dialogs in Firefox even when its
+  runtime message includes an unrelated `sender.tab`.
+- Reserve each source tab before opening its rule editor, preventing duplicate
+  dialogs from repeated Set/Edit actions and rapid parallel requests.
+- Persist and explicitly pass the captured rule-editor source URL before the
+  dialog is created, so Firefox can show and validate its source context even
+  when `sender.tab` is unavailable.
+- Make Set Rules unique per source tab across repeated and rapid requests, and
+  release its session record when the source tab or dialog closes.
+- Keep Firefox rule dialogs bound to their captured source context when Firefox
+  omits `sender.tab` for an internal extension-page request.
+- Preserve the exact source tab, browser window, and URL for every rule dialog
+  in session storage, preventing Firefox from incorrectly asking users to
+  reopen a legitimately opened dialog.
+- Remove the invalid Firefox manifest `windows` permission while retaining the
+  WebExtensions windows API used by the extension.
+- Load every .NET ZIP assembly required by Windows PowerShell package builds.
+- Create Chrome and Firefox ZIP entries with portable `/` path separators so
+  AMO accepts nested extension files on Windows builds.
+- Reject ZIP entries with backslashes, absolute paths, parent-directory
+  components, or an extension wrapper directory during packaging validation.
 - Rebuild only the controlled same-version Chrome and Firefox ZIP artifacts
   instead of stopping when those ZIP names already exist.
 - Remove all temporary dry-run package artifacts and fail visibly if their

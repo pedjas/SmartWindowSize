@@ -61,8 +61,15 @@ document.querySelector("#diagnostics-tab").addEventListener("click", () => selec
 selectOptionsTab(["#rules", "#diagnostics"].includes(location.hash) ? location.hash.slice(1) : "configuration");
 
 
-/** Human-readable diagnostic entries currently returned by the service worker. @type {Array<{occurredAt: string, operation: string, message: string}>} */
+/** Human-readable diagnostic entries currently returned by the service worker. @type {Array<object>} */
 let diagnostics = [];
+
+
+/** Formats one session diagnostic as a complete copyable text record. @param {object} entry Stored diagnostic entry. @returns {string} User-facing and technical diagnostic text. */
+function formatDiagnostic(entry) {
+  const technical = entry.technical ? `\nTechnical details:\n${JSON.stringify(entry.technical, null, 2)}` : "";
+  return `Timestamp: ${entry.occurredAt}\nOperation: ${entry.operation}\nUser-facing message: ${entry.message}${technical}`;
+}
 
 
 /** Renders the current session-only diagnostic log in Configuration. @returns {Promise<void>} Completes after the DOM reflects the latest entries. */
@@ -70,7 +77,7 @@ async function renderDiagnostics() {
   const response = await request({ type: "get-diagnostics" });
   diagnostics = response?.entries ?? [];
   document.querySelector("#diagnostic-status").textContent = diagnostics.length ? `${diagnostics.length} error${diagnostics.length === 1 ? "" : "s"} recorded in this browser session.` : "No errors recorded in this browser session.";
-  document.querySelector("#diagnostic-log").textContent = diagnostics.length ? diagnostics.map((entry) => `${entry.occurredAt} | ${entry.operation}\n${entry.message}`).join("\n\n") : "No diagnostics available.";
+  document.querySelector("#diagnostic-log").textContent = diagnostics.length ? diagnostics.map(formatDiagnostic).join("\n\n") : "No diagnostics available.";
   document.querySelector("#diagnostics-tab").classList.toggle("has-errors", diagnostics.length > 0);
 }
 
@@ -81,7 +88,7 @@ for (const button of document.querySelectorAll("button")) button.title ||= butto
 
 /** Copies the displayed diagnostic log for sharing without requiring Extension Manager access. @returns {Promise<void>} Completes after clipboard writing is requested. */
 async function copyDiagnostics() {
-  const text = diagnostics.length ? diagnostics.map((entry) => `${entry.occurredAt} | ${entry.operation}\n${entry.message}`).join("\n\n") : "No diagnostics available.";
+  const text = diagnostics.length ? diagnostics.map(formatDiagnostic).join("\n\n") : "No diagnostics available.";
   await navigator.clipboard.writeText(text);
 }
 

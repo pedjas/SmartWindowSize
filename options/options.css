@@ -19,3 +19,9 @@ body { font: 15px system-ui, sans-serif; color: #18212f; background: #f8fafc; ma
 .automatic-window-size legend { padding: 0 6px; font-weight: 600; }
 .automatic-window-size legend label { font-weight: inherit; }
 .preset-row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+
+/* Use CSS system colors so Configuration follows the active browser theme. */
+:root { color-scheme: light dark; }
+body, section, form, .scope-description, .rule-card, .automatic-window-size { color: CanvasText; background: Canvas; }
+button { color: ButtonText; background: ButtonFace; border-color: ButtonBorder; }
+nav button[aria-selected="true"] { color: HighlightText; background: Highlight; }

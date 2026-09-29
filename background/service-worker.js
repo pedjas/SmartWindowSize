@@ -1,5 +1,5 @@
 /**
- * SmartWindowSize | Version: 1.0.24 | Last updated: 2026-09-28 17:20:00 +02:00
+ * SmartWindowSize | Version: 1.0.37 | Last updated: 2026-09-29 17:33:00 +02:00
  *
  * Coordinates serialized window operations, validated configuration writes,
  * unique dialogs, and session diagnostics.
@@ -45,6 +45,15 @@ let dependentDialogQueue = Promise.resolve();
 /** Serializes editor ownership and manual rule mutations across all dialogs. @type {Promise<unknown>} */
 let editorQueue = Promise.resolve();
 
+/** Monotonic fallback component for rule-editor tokens when crypto.randomUUID is unavailable. @type {number} */
+let editorTokenSequence = 0;
+
+/** Maximum age of an opening editor reservation before it can be treated as abandoned. @type {number} */
+const EDITOR_OPENING_LEASE_MS = 30000;
+
+/** Bounded handshake timers keyed by editor token; session storage remains the authoritative lifecycle record. @type {Map<string, ReturnType<typeof setTimeout>>} */
+const editorOpeningTimers = new Map();
+
 
 /** Announces access or saved-rule changes without exposing source URLs. @returns {void} */
 function notifyRuleEditors() {
@@ -52,15 +61,53 @@ function notifyRuleEditors() {
 }
 
 
-/** Runs an editor operation with a reconciled, session-persisted registry. @param {Function} operation Receives live editor records and owner tab ID. @returns {Promise<unknown>} Operation result. */
+/** Cancels the local fallback timeout after an editor handshake, close, or explicit cleanup. @param {string} token Editor token. @returns {void} Clears the matching timer when present. */
+function clearRuleEditorOpeningTimeout(token) {
+  const timer = editorOpeningTimers.get(token);
+  if (timer !== undefined) clearTimeout(timer);
+  editorOpeningTimers.delete(token);
+}
+
+
+/** Removes a popup that never completed its token-bound page handshake and records an actionable local failure. @param {string} token Reserved editor token. @returns {Promise<void>} Completes after cleanup and best-effort diagnostics. */
+async function expireRuleEditorOpening(token) {
+  clearRuleEditorOpeningTimeout(token);
+  const context = await withEditors((registry) => {
+    const entry = registry.entries[token];
+    if (!entry || entry.status !== "opening" || Date.now() - entry.openingAt < EDITOR_OPENING_LEASE_MS) return null;
+    delete registry.entries[token];
+    if (registry.owner === token) registry.owner = null;
+    return {
+      phase: "handshake-timeout",
+      source: { tabId: entry.sourceId, windowId: entry.sourceWindowId, url: entry.url },
+      editor: { token, windowId: entry.windowId, tabId: entry.dialogId },
+      browserResult: { lifecycle: entry.lifecycle, reason: "Rules page did not complete its editor handshake before timeout." }
+    };
+  });
+  if (context) await reportDiagnostic("open-rule-editor", new Error("The rule dialog did not finish loading before timeout."), context);
+}
+
+
+/** Schedules the non-blocking fallback for a popup that stays in opening state after browser navigation begins. @param {string} token Reserved editor token. @returns {void} Starts one bounded timeout for the token. */
+function scheduleRuleEditorOpeningTimeout(token) {
+  clearRuleEditorOpeningTimeout(token);
+  editorOpeningTimers.set(token, setTimeout(() => {
+    expireRuleEditorOpening(token).catch((error) => reportDiagnostic("Expire rule editor opening", error));
+  }, EDITOR_OPENING_LEASE_MS));
+}
+
+
+/** Runs an editor operation with a reconciled, session-persisted registry. @param {Function} operation Receives live editor records and owner entry key. @returns {Promise<unknown>} Operation result. */
 function withEditors(operation) {
   const work = editorQueue.catch(() => undefined).then(async () => {
     const registry = await readSession("ruleEditors") ?? { owner: null, entries: {} };
     const before = fingerprint(registry);
-    for (const [id, entry] of Object.entries(registry.entries)) {
-      const live = await chrome.tabs.get(Number(id)).catch(() => null);
-      if (!live || (live.url !== entry.dialogUrl && live.pendingUrl !== entry.dialogUrl)) delete registry.entries[id];
-      else entry.windowId = live.windowId;
+    for (const [key, entry] of Object.entries(registry.entries)) {
+      entry.sourceKey ??= `${entry.sourceWindowId}:${entry.sourceId}`;
+      const live = await locateRuleEditor(entry);
+      if (live) Object.assign(entry, { windowId: live.window.id, dialogId: live.tab.id });
+      else if (entry.status === "opening" && !Number.isInteger(entry.windowId) && !Number.isInteger(entry.dialogId) && Date.now() - entry.openingAt < EDITOR_OPENING_LEASE_MS) continue;
+      else delete registry.entries[key];
     }
     if (!registry.entries[registry.owner]) registry.owner = null;
     try { return await operation(registry); }
@@ -76,11 +123,37 @@ function withEditors(operation) {
 }
 
 
-/** Authenticates a dialog against its browser-supplied tab and bound source. @param {object} registry Live sessions. @param {object} sender Runtime sender. @param {object} message Request. @returns {object} Bound editor record. */
-function editorRecord(registry, sender, message) {
-  const entry = registry.entries[sender.tab?.id];
-  if (!entry || entry.dialogUrl !== sender.tab.url || entry.sourceId !== message.tabId) throw new Error("Reopen this rule dialog from its source page.");
-  return entry;
+/** Creates an opaque, per-dialog token that survives service-worker suspension through the dialog URL and session registry. @returns {string} Editor token. */
+function createEditorToken() {
+  const random = globalThis.crypto?.randomUUID?.();
+  editorTokenSequence += 1;
+  return random ?? `${Date.now()}-${editorTokenSequence}`;
+}
+
+
+/** Extracts the opaque editor token from an internal dialog URL. @param {string|undefined} url Browser-supplied dialog URL. @returns {string|undefined} Token when the URL is valid. */
+function editorTokenFromUrl(url) {
+  try { return new URL(url).searchParams.get("editorToken") ?? undefined; }
+  catch { return undefined; }
+}
+
+
+/** Authenticates an editor handshake from its opaque token, immutable source binding, and known popup identity. @param {object} registry Live sessions. @param {object} message Request. @returns {object} Bound editor record with registry key. */
+function editorRecord(registry, message) {
+  const entryId = Object.keys(registry.entries).find((id) => registry.entries[id].token === message.editorToken);
+  const entry = registry.entries[entryId];
+  if (!entry || entry.sourceId !== message.tabId || entry.sourceWindowId !== message.sourceWindowId || entry.token !== message.editorToken) {
+    throw new Error("Reopen this rule dialog from its source page.");
+  }
+  if (Number.isInteger(message.editorTabId) && Number.isInteger(entry.dialogId) && message.editorTabId !== entry.dialogId) {
+    throw new Error("Reopen this rule dialog from its source page.");
+  }
+  if (Number.isInteger(message.editorWindowId) && Number.isInteger(entry.windowId) && message.editorWindowId !== entry.windowId) {
+    throw new Error("Reopen this rule dialog from its source page.");
+  }
+  if (Number.isInteger(message.editorTabId)) entry.dialogId ??= message.editorTabId;
+  if (Number.isInteger(message.editorWindowId)) entry.windowId ??= message.editorWindowId;
+  return { entry, entryId };
 }
 
 
@@ -90,11 +163,103 @@ function isExpectedStaleEditorRequest(message, error) {
 }
 
 
-/** Rejects every rule mutation from a read-only or rebound dialog. @param {object} registry Live sessions. @param {object} sender Runtime sender. @param {object} message Mutation. @returns {void} Throws before any preparation or write. */
-function requireEditorOwner(registry, sender, message) {
-  const entry = editorRecord(registry, sender, message);
-  if (registry.owner !== sender.tab.id) throw new Error("This dialog is read-only. Focus the editable dialog or enable editing.");
+/** Rejects every rule mutation from a read-only or rebound dialog. @param {object} registry Live sessions. @param {object} message Mutation. @returns {{entry: object, entryId: string}} Authenticated editor record. */
+function requireEditorOwner(registry, message) {
+  const { entry, entryId } = editorRecord(registry, message);
+  if (registry.owner !== entryId) throw new Error("This dialog is read-only. Focus the editable dialog or enable editing.");
   if (entry.url !== message.url) throw new Error("The source URL does not match this dialog.");
+  return { entry, entryId };
+}
+
+
+/** Builds the privacy-limited context retained when a token-authorized Rules save fails. @param {object} entry Bound editor session entry. @param {object|undefined} activeTab Active tab observed only for diagnostics. @param {string} condition Validation or save stage that failed. @returns {object} Copyable diagnostic context. */
+function saveRuleEditorDiagnosticContext(entry, activeTab, condition) {
+  return {
+    phase: "save-site-rules",
+    validation: condition,
+    source: { tabId: entry.sourceId, windowId: entry.sourceWindowId, url: entry.url },
+    editor: { token: entry.token, windowId: entry.windowId, tabId: entry.dialogId },
+    activeTab: activeTab ? { tabId: activeTab.id ?? null, windowId: activeTab.windowId ?? null } : null
+  };
+}
+
+
+/** Saves staged Rules changes through the immutable editor session instead of the browser's currently active tab. @param {object} registry Live editor registry. @param {object} message Token-bound save request. @returns {Promise<object>} Successful save response. */
+async function saveSiteRulesForEditor(registry, message) {
+  let bound;
+  try {
+    bound = requireEditorOwner(registry, message);
+  } catch (error) {
+    const activeTab = Number.isInteger(message.sourceWindowId)
+      ? (await chrome.tabs.query({ active: true, windowId: message.sourceWindowId }).catch(() => []))[0] ?? null
+      : null;
+    throw attachRuleEditorDiagnosticContext(error, {
+      phase: "save-site-rules",
+      validation: "editor-session-token-or-ownership",
+      source: { tabId: message.tabId ?? null, windowId: message.sourceWindowId ?? null, url: message.url ?? null },
+      editor: { token: message.editorToken ?? null, windowId: message.editorWindowId ?? null, tabId: message.editorTabId ?? null },
+      activeTab: activeTab ? { tabId: activeTab.id ?? null, windowId: activeTab.windowId ?? null } : null
+    });
+  }
+  const { entry } = bound;
+  let activeTab = (await chrome.tabs.query({ active: true, windowId: entry.sourceWindowId }))[0] ?? null;
+  const diagnostic = saveRuleEditorDiagnosticContext(entry, activeTab, "source-tab-lookup");
+  try {
+    const source = await chrome.tabs.get(entry.sourceId).catch(() => null);
+    if (!source) {
+      diagnostic.validation = "source-tab-closed";
+      throw new Error("The source tab was closed before saving its rules.");
+    }
+    if (source.windowId !== entry.sourceWindowId) {
+      diagnostic.validation = "source-window-changed";
+      throw new Error("The source tab moved to another window. Reload this dialog.");
+    }
+    if (source.url !== entry.url) {
+      diagnostic.validation = "source-url-changed";
+      throw new Error("The source page changed. Reload this dialog before saving.");
+    }
+    diagnostic.validation = "source-session-valid";
+    await requireEditorSource(source, entry.url);
+    await inWindow(entry.sourceWindowId, async () => {
+      await flushPendingBounds(entry.sourceWindowId);
+      const currentSource = await chrome.tabs.get(entry.sourceId).catch(() => null);
+      if (!currentSource) {
+        diagnostic.validation = "source-tab-closed-during-save";
+        throw new Error("The source tab was closed before saving its rules.");
+      }
+      if (currentSource.windowId !== entry.sourceWindowId) {
+        diagnostic.validation = "source-window-changed-during-save";
+        throw new Error("The source tab moved to another window. Reload this dialog.");
+      }
+      if (currentSource.url !== entry.url) {
+        diagnostic.validation = "source-url-changed-during-save";
+        throw new Error("The source page changed. Reload this dialog before saving.");
+      }
+      const window = await chrome.windows.get(entry.sourceWindowId);
+      if (window.state !== "normal") {
+        diagnostic.validation = "source-window-not-normal";
+        throw new Error("Restore the source window before saving its dimensions.");
+      }
+      const display = await displayForRule(null, window);
+      await updateConfig((config) => {
+        const candidate = applySiteRuleEdits(config, entry.url, message);
+        const changedIds = new Set(message.rules.filter((rule) => fingerprint(rule) !== fingerprint(message.baseRules.find((base) => base.id === rule.id))).map((rule) => rule.id));
+        candidate.rules = candidate.rules.map((rule) => changedIds.has(rule.id) ? {
+          ...rule, width: window.width, height: window.height,
+          position: rule.position.enabled ? { enabled: true, x: window.left, y: window.top } : rule.position,
+          display: rule.display.enabled && display ? { enabled: true, id: display.id } : rule.display,
+          lastUpdatedAt: new Date().toISOString()
+        } : rule);
+        return candidate;
+      });
+    });
+    activeTab = (await chrome.tabs.query({ active: true, windowId: entry.sourceWindowId }))[0] ?? null;
+    if (activeTab?.id === entry.sourceId) await applyForTab(source);
+    return { ok: true };
+  } catch (error) {
+    diagnostic.activeTab = activeTab ? { tabId: activeTab.id ?? null, windowId: activeTab.windowId ?? null } : null;
+    throw attachRuleEditorDiagnosticContext(error, diagnostic);
+  }
 }
 
 /** Serialized context-menu replacement. @type {Promise<unknown>} */
@@ -198,16 +363,23 @@ function scheduleIconRefresh() {
 }
 
 
-/** Stores a local error and makes it immediately visible to the user. @param {string} operation Failed operation. @param {unknown} error Failure. @returns {Promise<void>} Best-effort completion. */
-async function reportDiagnostic(operation, error) {
+/** Stores a local error and makes it immediately visible to the user. @param {string} operation Failed operation. @param {unknown} error Failure. @param {object|undefined} context Browser-operation context safe for Diagnostics. @returns {Promise<void>} Best-effort completion. */
+async function reportDiagnostic(operation, error, context = undefined) {
   try {
     const config = await loadConfig();
-    await recordDiagnostic(operation, error, config.global.debug);
+    await recordDiagnostic(operation, error, config.global.debug, context ?? error?.diagnosticContext);
     notifyDiagnostics();
     await scheduleIconRefresh();
   } catch {
     // A diagnostic failure must not create an unhandled error loop.
   }
+}
+
+
+/** Attaches a non-user-facing, JSON-safe failure trace before the common message handler records the error. @param {unknown} error Failure from a rule-dialog browser API operation. @param {object} context Immutable source and dialog trace. @returns {unknown} Original failure for normal request handling. */
+function attachRuleEditorDiagnosticContext(error, context) {
+  if (error && typeof error === "object" && !error.diagnosticContext) error.diagnosticContext = context;
+  return error;
 }
 
 
@@ -383,6 +555,45 @@ async function openUniqueDialog(key, url, width, height, sourceWindowId = undefi
 }
 
 
+/** Finds a rule dialog by recorded popup IDs first, then by token after a background restart. @param {object} entry Session-backed editor entry. @returns {Promise<{window: object, tab: object}|null>} Matching live dialog or null. */
+async function locateRuleEditor(entry) {
+  if (Number.isInteger(entry.dialogId) && Number.isInteger(entry.windowId)) {
+    const tab = await chrome.tabs.get(entry.dialogId).catch(() => null);
+    if (tab?.windowId === entry.windowId) {
+      const window = await chrome.windows.get(entry.windowId).catch(() => null);
+      if (window) return { window, tab };
+    }
+  }
+  const expectedPath = chrome.runtime.getURL("rule-delete/rule-delete.html").split("?")[0];
+  const tabs = await chrome.tabs.query({});
+  const tab = tabs.find((candidate) => [candidate.url, candidate.pendingUrl].some((url) =>
+    url?.split("?")[0] === expectedPath && editorTokenFromUrl(url) === entry.token));
+  if (!tab) return null;
+  const window = await chrome.windows.get(tab.windowId).catch(() => null);
+  return window ? { window, tab } : null;
+}
+
+
+/** Activates and focuses the editor popup while preserving its opening state until the page handshake succeeds. @param {object} entry Session-backed editor entry. @returns {Promise<boolean>} Whether a matching live dialog was focused. */
+async function focusRecordedRuleEditor(entry) {
+  const dialog = await locateRuleEditor(entry);
+  if (!dialog) return false;
+  await chrome.tabs.update(dialog.tab.id, { active: true });
+  await chrome.windows.update(dialog.window.id, { focused: true });
+  Object.assign(entry, { windowId: dialog.window.id, dialogId: dialog.tab.id });
+  return true;
+}
+
+
+/** Chooses the unique tab created for a rules popup without requiring its URL to have finished navigation. @param {object} window Newly created or focused popup window. @param {string} token Reserved editor token. @returns {Promise<{tab: object|null, candidates: object[]}>} Candidate editor tab and observed popup tabs. */
+async function discoverRuleEditorTab(window, token) {
+  const returnedTabs = Array.isArray(window.tabs) ? window.tabs : [];
+  const candidates = returnedTabs.length ? returnedTabs : await chrome.tabs.query({ windowId: window.id });
+  const tokenTab = candidates.find((candidate) => editorTokenFromUrl(candidate.url) === token || editorTokenFromUrl(candidate.pendingUrl) === token);
+  return { tab: tokenTab ?? (candidates.length === 1 ? candidates[0] : null), candidates };
+}
+
+
 /** Opens or focuses the single internal tab that displays the packaged local README. @returns {Promise<void>} Completes after the tab is created or focused. */
 async function openLocalReadme() {
   const url = chrome.runtime.getURL("readme-viewer/readme.html");
@@ -396,11 +607,14 @@ async function openLocalReadme() {
 }
 
 
-/** Resolves an explicit source tab, or the last focused browser tab for popup actions. @param {object} message Action request. @param {object} sender Browser sender. @returns {Promise<object|undefined>} Source tab. */
+/** Resolves a source tab and rejects an action whose captured URL or window changed before the background received it. @param {object} message Action request. @param {object} sender Browser sender. @returns {Promise<object|undefined>} Source tab. */
 async function sourceTab(message, sender) {
-  if (Number.isInteger(message.tabId)) return chrome.tabs.get(message.tabId);
-  if (sender.tab) return chrome.tabs.get(sender.tab.id);
-  return (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0];
+  const tab = Number.isInteger(message.tabId) ? await chrome.tabs.get(message.tabId)
+    : sender.tab ? await chrome.tabs.get(sender.tab.id)
+      : (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0];
+  if (message.sourceUrl !== undefined && tab?.url !== message.sourceUrl) throw new Error("The source page changed before the action could start.");
+  if (message.sourceWindowId !== undefined && tab?.windowId !== message.sourceWindowId) throw new Error("The source window changed before the action could start.");
+  return tab;
 }
 
 
@@ -427,27 +641,35 @@ async function dispatchAction(message, sender, registry) {
   if (message.type === "get-app-version") return { version: APP_VERSION };
   if (message.type === "get-configuration") return { config: await loadConfig(), rulesLocked: registry.owner !== null };
   if (message.type === "focus-rule-editor") {
-    editorRecord(registry, sender, message);
+    editorRecord(registry, message);
     const owner = registry.entries[registry.owner];
     if (!owner) throw new Error("No editable dialog is open. You can enable editing here.");
     await chrome.windows.update(owner.windowId, { focused: true });
     return { ok: true };
   }
   if (["get-rule-editor-state", "enable-rule-editing"].includes(message.type)) {
-    const entry = editorRecord(registry, sender, message);
+    const { entry, entryId } = editorRecord(registry, message);
+    if (message.type === "get-rule-editor-state" && entry.status === "opening" && Number.isInteger(message.editorTabId) && Number.isInteger(message.editorWindowId)) {
+      entry.status = "open";
+      entry.openedAt = Date.now();
+      entry.lifecycle ??= {};
+      entry.lifecycle.transition = "opening -> open";
+      entry.lifecycle.handshakeAt = new Date().toISOString();
+      clearRuleEditorOpeningTimeout(entry.token);
+    }
     const source = await chrome.tabs.get(entry.sourceId).catch(() => null);
     const config = await loadConfig();
-    const sourceValid = source?.url === entry.url;
+    const sourceValid = source?.windowId === entry.sourceWindowId && source?.url === entry.url;
     if (message.type === "enable-rule-editing") {
       if (!sourceValid || !config.global.enabled) throw new Error("The source page changed or the extension is disabled. Editing is unavailable.");
-      if (registry.owner !== null && registry.owner !== sender.tab.id) throw new Error("Rules are being edited in another window.");
-      registry.owner = sender.tab.id;
+      if (registry.owner !== null && registry.owner !== entryId) throw new Error("Rules are being edited in another window.");
+      registry.owner = entryId;
     }
-    return { url: entry.url, rules: matchingRulesForUrl(entry.url, config), ownsEditor: registry.owner === sender.tab.id,
-      writable: registry.owner === sender.tab.id && sourceValid && config.global.enabled,
+    return { url: entry.url, rules: matchingRulesForUrl(entry.url, config), ownsEditor: registry.owner === entryId,
+      writable: registry.owner === entryId && sourceValid && config.global.enabled,
       hasOwner: registry.owner !== null, sourceValid, enabled: config.global.enabled };
   }
-  if (["prepare-site-rule", "save-site-rules"].includes(message.type)) requireEditorOwner(registry, sender, message);
+  if (message.type === "prepare-site-rule") requireEditorOwner(registry, message);
   if (message.type === "get-diagnostics") return { entries: await loadDiagnostics((await loadConfig()).global.debug) };
   if (message.type === "report-client-error") {
     if (typeof message.operation !== "string" || typeof message.message !== "string") throw new Error("Invalid diagnostic entry.");
@@ -482,6 +704,12 @@ async function dispatchAction(message, sender, registry) {
     await openLocalReadme();
     return { ok: true };
   }
+  if (message.type === "open-options") {
+    if (typeof chrome.runtime.openOptionsPage !== "function") throw new Error("This browser does not provide an Options page action.");
+    await chrome.runtime.openOptionsPage();
+    return { ok: true };
+  }
+  if (message.type === "save-site-rules") return saveSiteRulesForEditor(registry, message);
   const tab = await sourceTab(message, sender);
   if (message.type === "get-state") {
     const config = await loadConfig();
@@ -497,13 +725,62 @@ async function dispatchAction(message, sender, registry) {
   }
   if (message.type === "open-rule-editor") {
     await requireEditorSource(tab);
-    const dialogUrl = `${chrome.runtime.getURL("rule-delete/rule-delete.html")}?tabId=${tab.id}`;
-    const window = await openUniqueDialog(`rules:${tab.id}`, dialogUrl, 640, 620, tab.windowId);
-    const dialog = (await chrome.tabs.query({ windowId: window.id })).find((candidate) => candidate.url === dialogUrl || candidate.pendingUrl === dialogUrl);
-    if (!dialog) throw new Error("The rule dialog could not be initialized.");
-    if (!registry.entries[dialog.id]) {
-      registry.entries[dialog.id] = { sourceId: tab.id, url: tab.url, windowId: window.id, dialogUrl };
-      if (registry.owner === null) registry.owner = dialog.id;
+    const sourceKey = `${tab.windowId}:${tab.id}`;
+    const existing = Object.entries(registry.entries).find(([, entry]) => entry.sourceKey === sourceKey);
+    if (existing) {
+      if (existing[1].sourceClosed) {
+        clearRuleEditorOpeningTimeout(existing[1].token);
+        delete registry.entries[existing[0]];
+        if (registry.owner === existing[0]) registry.owner = null;
+      } else {
+        if (await focusRecordedRuleEditor(existing[1])) return { ok: true };
+        if (existing[1].status === "opening" && Date.now() - existing[1].openingAt < EDITOR_OPENING_LEASE_MS) return { ok: true, pending: true };
+        delete registry.entries[existing[0]];
+        if (registry.owner === existing[0]) registry.owner = null;
+      }
+    }
+    const token = createEditorToken();
+    const source = { sourceKey, sourceId: tab.id, sourceWindowId: tab.windowId, url: tab.url, status: "opening", openingAt: Date.now(), windowId: null, dialogId: null, token,
+      lifecycle: { transition: "reserved", createdWindowId: null, discoveredTabId: null, initialTabUrl: null } };
+    registry.entries[token] = source;
+    if (registry.owner === null) registry.owner = token;
+
+    /** Structured trace retained only when this dialog initialization fails. @type {object} */
+    const diagnosticContext = {
+      phase: "reserve-source-context",
+      source: { tabId: tab.id, windowId: tab.windowId, url: tab.url },
+      editor: { token, windowId: null, tabId: null },
+      browserResult: { reservation: "saved" }
+    };
+
+    // Reserve and persist the immutable source before creating the window, preventing parallel dialogs and Firefox startup races.
+    await writeSession("ruleEditors", registry);
+    try {
+      const dialogUrl = `${chrome.runtime.getURL("rule-delete/rule-delete.html")}?tabId=${tab.id}&sourceWindowId=${tab.windowId}&editorToken=${encodeURIComponent(token)}&sourceUrl=${encodeURIComponent(tab.url)}`;
+      diagnosticContext.phase = "create-dialog-window";
+      const window = await openUniqueDialog(`rules:${sourceKey}`, dialogUrl, 640, 620, tab.windowId);
+      diagnosticContext.editor.windowId = window.id;
+      diagnosticContext.browserResult.createDialogWindow = { windowId: window.id, type: window.type ?? null };
+      diagnosticContext.phase = "find-dialog-tab";
+      const discovery = await discoverRuleEditorTab(window, token);
+      diagnosticContext.browserResult.queryDialogTabs = {
+        windowId: window.id,
+        tabs: discovery.candidates.map((candidate) => ({ id: candidate.id ?? null, windowId: candidate.windowId ?? null, url: candidate.url ?? null, pendingUrl: candidate.pendingUrl ?? null }))
+      };
+      const dialog = discovery.tab;
+      if (!dialog) throw new Error("The rule dialog could not be initialized.");
+      Object.assign(source, { windowId: window.id, dialogId: dialog.id,
+        lifecycle: { transition: "opening", createdWindowId: window.id, discoveredTabId: dialog.id, initialTabUrl: dialog.url ?? dialog.pendingUrl ?? null } });
+      Object.assign(diagnosticContext.editor, { tabId: dialog.id });
+      diagnosticContext.browserResult.discoveredEditorTab = { id: dialog.id ?? null, windowId: dialog.windowId ?? null, initialUrl: dialog.url ?? null, pendingUrl: dialog.pendingUrl ?? null };
+      await writeSession("ruleEditors", registry);
+      scheduleRuleEditorOpeningTimeout(token);
+    } catch (error) {
+      clearRuleEditorOpeningTimeout(token);
+      delete registry.entries[token];
+      if (registry.owner === token) registry.owner = null;
+      await writeSession("ruleEditors", registry);
+      throw attachRuleEditorDiagnosticContext(error, diagnosticContext);
     }
     return { ok: true };
   }
@@ -552,33 +829,6 @@ async function dispatchAction(message, sender, registry) {
       position: message.rememberPosition ? { enabled: true, x: current.left, y: current.top } : { enabled: false, x: null, y: null },
       display: message.rememberMonitor && display ? { enabled: true, id: display.id } : { enabled: false, id: null },
       lastUpdatedAt: new Date().toISOString() } };
-  }
-  if (message.type === "save-site-rules") {
-    await requireEditorSource(tab, message.url);
-    if (!tab.active) throw new Error("Activate the source tab before saving its rules.");
-    await inWindow(tab.windowId, async () => {
-      await flushPendingBounds(tab.windowId);
-      const currentTab = await chrome.tabs.get(tab.id);
-      if (!currentTab.active) throw new Error("Activate the source tab before saving its rules.");
-      if (currentTab.windowId !== tab.windowId) throw new Error("The source tab moved to another window. Reload this dialog.");
-      const window = await chrome.windows.get(currentTab.windowId);
-      if (window.state !== "normal") throw new Error("Restore the source window before saving its rules.");
-      const display = await displayForRule(null, window);
-      await updateConfig((config) => {
-        const candidate = applySiteRuleEdits(config, currentTab.url, message);
-        const changedIds = new Set(message.rules.filter((rule) => fingerprint(rule) !== fingerprint(message.baseRules.find((base) => base.id === rule.id))).map((rule) => rule.id));
-        candidate.rules = candidate.rules.map((rule) => changedIds.has(rule.id) ? {
-          ...rule, width: window.width, height: window.height,
-          position: rule.position.enabled ? { enabled: true, x: window.left, y: window.top } : rule.position,
-          display: rule.display.enabled && display ? { enabled: true, id: display.id } : rule.display,
-          lastUpdatedAt: new Date().toISOString()
-        } : rule);
-        return candidate;
-      });
-    });
-    const applied = await applyForTab(tab);
-    if (!applied || applied.skipped === "source-changed") throw new Error("Rules were saved, but the source tab changed before they could be applied. Return to the source page and reload this dialog.");
-    return { ok: true };
   }
   throw new Error("Unsupported extension request.");
 }
@@ -665,7 +915,12 @@ chrome.windows.onRemoved.addListener((id) => {
   takeDependentDialogsForClosedWindow(id).then((dialogWindowIds) => Promise.all(dialogWindowIds.map((dialogWindowId) =>
     chrome.windows.remove(dialogWindowId).catch((error) => reportDiagnostic("Close dependent dialog", error))))).catch((error) => reportDiagnostic("Release dependent dialogs", error));
   withEditors((registry) => {
-    for (const [tabId, entry] of Object.entries(registry.entries)) if (entry.windowId === id) delete registry.entries[tabId];
+    for (const [tabId, entry] of Object.entries(registry.entries)) {
+      if (entry.windowId === id) {
+        clearRuleEditorOpeningTimeout(entry.token);
+        delete registry.entries[tabId];
+      }
+    }
     if (!registry.entries[registry.owner]) registry.owner = null;
     notifyRuleEditors();
   }).catch((error) => reportDiagnostic("Release rule editor window", error));
@@ -678,5 +933,21 @@ chrome.windows.onRemoved.addListener((id) => {
     await removeSession(windowKey(id));
     await removeSession(`newWindow:${id}`);
   }).catch((error) => reportDiagnostic("Remove window state", error));
+});
+chrome.tabs.onRemoved.addListener((id) => {
+  withEditors((registry) => {
+    for (const [entryId, entry] of Object.entries(registry.entries)) {
+      if (entry.dialogId === id) {
+        clearRuleEditorOpeningTimeout(entry.token);
+        delete registry.entries[entryId];
+      } else if (entry.sourceId === id) {
+        entry.sourceClosed = true;
+        entry.lifecycle ??= {};
+        entry.lifecycle.transition = "source closed";
+        entry.lifecycle.sourceClosedAt = new Date().toISOString();
+      }
+    }
+    if (!registry.entries[registry.owner]) registry.owner = null;
+  }).catch((error) => reportDiagnostic("Release rule editor tab", error));
 });
 initialize().catch((error) => reportDiagnostic("Initialize extension", error));

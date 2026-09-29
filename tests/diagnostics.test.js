@@ -55,6 +55,29 @@ test("concurrent diagnostic writes retain every entry and redact URLs by default
 });
 
 
+test("rule-editor diagnostics preserve a copyable technical cause chain and source context", async () => {
+  await clearDiagnostics();
+  const cause = new TypeError("Firefox tabs query rejected");
+  const error = new Error("The rule dialog could not be initialized.", { cause });
+  error.stack = "Error: The rule dialog could not be initialized.\n    at test";
+  await recordDiagnostic("open-rule-editor", error, false, {
+    phase: "find-dialog-tab",
+    source: { tabId: 17, windowId: 8, url: "https://private.example/path?mode=test" },
+    editor: { token: "editor-token", windowId: 22, tabId: null },
+    browserResult: { queryDialogTabs: { windowId: 22, tabs: [] } }
+  });
+  const [entry] = await loadDiagnostics();
+  assert.equal(entry.operation, "open-rule-editor");
+  assert.equal(entry.message, "The rule dialog could not be initialized.");
+  assert.equal(entry.technical.error.name, "Error");
+  assert.equal(entry.technical.error.cause.name, "TypeError");
+  assert.equal(entry.technical.context.phase, "find-dialog-tab");
+  assert.equal(entry.technical.context.source.tabId, 17);
+  assert.equal(entry.technical.context.source.url, "https://private.example/path?mode=test");
+  assert.deepEqual(entry.technical.context.browserResult.queryDialogTabs.tabs, []);
+});
+
+
 test("a browser without session storage uses a volatile diagnostic fallback", async () => {
   const saved = chrome.storage.session;
   delete chrome.storage.session;

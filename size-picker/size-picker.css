@@ -13,3 +13,8 @@ footer { display: flex; gap: 8px; align-items: center; justify-content: flex-end
 .vertical-option { display: block; margin-top: 8px; font-weight: 400; }
 .vertical-option input { vertical-align: middle; }
 button:disabled { cursor: not-allowed; opacity: .5; }
+
+/* Use CSS system colors so this auxiliary dialog follows the active browser theme. */
+:root { color-scheme: light dark; }
+body, footer { color: CanvasText; background: Canvas; }
+button { color: ButtonText; background: ButtonFace; border-color: ButtonBorder; }

@@ -7,3 +7,8 @@ footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px;
 button { padding: 8px 12px; font: inherit; cursor: pointer; }
 #error { color: #b42318; }
 #error:empty { display: none; }
+
+/* Use CSS system colors so this auxiliary dialog follows the active browser theme. */
+:root { color-scheme: light dark; }
+body, footer { color: CanvasText; background: Canvas; }
+button { color: ButtonText; background: ButtonFace; border-color: ButtonBorder; }

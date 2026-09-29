@@ -3,7 +3,7 @@
   "name": "SmartWindowSize",
   "version": "__VERSION__",
   "description": "Restores browser window sizes by domain, subdomain, path, or page.",
-  "permissions": ["storage", "tabs", "windows", "contextMenus"],
+  "permissions": ["storage", "tabs", "contextMenus"],
   "background": {
     "scripts": ["background/firefox-background.js"],
     "type": "module"
@@ -24,10 +24,11 @@
     "48": "icons/active-48.png",
     "128": "icons/active-128.png"
   },
-  "options_page": "options/options.html",
+  "options_ui": { "page": "options/options.html", "open_in_tab": true },
   "browser_specific_settings": {
     "gecko": {
-      "id": "__FIREFOX_EXTENSION_ID__"
+      "id": "__FIREFOX_EXTENSION_ID__",
+      "strict_min_version": "115.0"
     }
   }
 }

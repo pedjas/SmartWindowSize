@@ -48,7 +48,7 @@ if (!toUrl(state.url)) document.querySelector("#set-rule").disabled = true;
 
 document.querySelector("#set-rule").addEventListener("click", async () => {
   await runClientAction("Open rule editor", async () => {
-    await request({ type: "open-rule-editor", tabId: state.tabId });
+    await request({ type: "open-rule-editor", tabId: state.tabId, sourceWindowId: state.windowId, sourceUrl: state.url });
     window.close();
   });
 });

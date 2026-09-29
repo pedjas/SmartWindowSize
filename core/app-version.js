@@ -1,5 +1,5 @@
 /**
- * SmartWindowSize | Version: 1.0.24 | Last updated: 2026-09-28 17:20:00 +02:00
+ * SmartWindowSize | Version: 1.0.37 | Last updated: 2026-09-29 17:33:00 +02:00
  *
  * This core configuration module exposes the single application version used by
  * the manifest, user interface, and diagnostics.
@@ -7,4 +7,4 @@
 
 
 /** Current application version displayed in options and synchronized with manifest.json. @type {string} */
-export const APP_VERSION = "1.0.24";
+export const APP_VERSION = "1.0.37";

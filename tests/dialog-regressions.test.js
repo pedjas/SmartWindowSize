@@ -67,6 +67,7 @@ test("menu clicks dispatch locally and report failed actions without runtime mes
     await listener({ menuItemId: "delete-matching-rules" }, { id: 2, windowId: 7, url: "https://alpha.example/" });
     await listener({ menuItemId: "global-enabled", checked: false });
     assert.deepEqual(requests.map((request) => request.type), ["open-about", "open-rule-editor", "set-global-enabled"]);
+    assert.deepEqual(requests[1], { type: "open-rule-editor", tabId: 2, sourceWindowId: 7, sourceUrl: "https://alpha.example/" });
     assert.deepEqual(failures, ["test failure"]);
   } finally {
     delete globalThis.chrome;
@@ -95,6 +96,31 @@ test("site-rule menu is disabled for an unsupported active URL and never dispatc
     await listener({ menuItemId: "delete-matching-rules" }, { id: 3, windowId: 9, url: "chrome-extension://test/options/options.html" });
     assert.deepEqual(requests, []);
     assert.deepEqual(failures, []);
+  } finally {
+    delete globalThis.chrome;
+  }
+});
+
+
+test("Firefox keeps its five extension actions flat by omitting only visual separators", async () => {
+  const entries = [];
+  let listener;
+  const requests = [];
+  const config = createDefaultConfig();
+  globalThis.chrome = {
+    storage: { local: { async get() { return { smartWindowSizeConfig: config }; } } },
+    tabs: { async query() { return [{ id: 3, windowId: 9, url: "https://alpha.example/" }]; } },
+    runtime: { getBrowserInfo() {} },
+    contextMenus: { async removeAll() {}, create(entry, callback) { entries.push(entry); callback(); }, onClicked: { addListener(callback) { listener = callback; } } }
+  };
+  try {
+    await createContextMenus();
+    assert.equal(entries.filter((entry) => entry.id === "open-options").length, 1);
+    assert.equal(entries.filter((entry) => entry.type === "separator").length, 0);
+    assert.deepEqual(entries.map((entry) => entry.id), ["global-enabled", "bring-window-on-screen", "delete-matching-rules", "open-options", "about"]);
+    registerContextMenuActions(async (message) => { requests.push(message); return { ok: true }; }, async () => {});
+    await listener({ menuItemId: "open-options" });
+    assert.deepEqual(requests, [{ type: "open-options" }]);
   } finally {
     delete globalThis.chrome;
   }

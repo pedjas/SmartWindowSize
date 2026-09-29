@@ -5,3 +5,7 @@ h1 { margin: 0; }
 #readme { margin: 0; padding: 20px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: white; border: 1px solid #cbd5e1; border-radius: 8px; box-shadow: 0 1px 3px #cbd5e1; font: 14px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; }
 #error { color: #b42318; margin: 0; }
 #error:empty { display: none; }
+
+/* Use CSS system colors so the packaged README follows the active browser theme. */
+:root { color-scheme: light dark; }
+body, #readme { color: CanvasText; background: Canvas; border-color: ButtonBorder; }

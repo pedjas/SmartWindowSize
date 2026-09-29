@@ -28,3 +28,9 @@ footer { justify-content: flex-end; padding: 12px 20px; border-top: 1px solid #c
 #source-url { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
 .access-actions { display: flex; gap: 8px; }
 #access-status { color: #334155; }
+
+/* Use CSS system colors so auxiliary dialogs follow the active browser theme. */
+:root { color-scheme: light dark; }
+body, li, #editor, footer { color: CanvasText; background: Canvas; }
+button { color: ButtonText; background: ButtonFace; border-color: ButtonBorder; }
+#save { color: HighlightText; background: Highlight; border-color: Highlight; }

@@ -51,6 +51,9 @@ async function browserFixture(rules = []) {
   let created = 0;
   let createdTab = 200;
   let nextTimer = 0;
+  let optionsOpened = 0;
+  let omitCreatedRuleDialogFromQuery = false;
+  let createdPopupStartsBlank = false;
 
 
   /** Captures registered browser event callbacks. @param {string} name Event key. @returns {object} Event facade. */
@@ -75,14 +78,18 @@ async function browserFixture(rules = []) {
 
   globalThis.chrome = {
     storage: { local: area(local, "local"), session: area(ephemeral, "session"), onChanged: event("storage") },
-    runtime: { getURL: (path) => `chrome-extension://test/${path}`, sendMessage: async (message) => { messages.push(message); },
+    runtime: { getURL: (path) => `chrome-extension://test/${path}`, sendMessage: async (message) => { messages.push(message); }, openOptionsPage: async () => { optionsOpened += 1; },
       onMessage: event("message"), onInstalled: event("installed"), onStartup: event("startup") },
     action: { setIcon: async (value) => { iconUpdates.push(value); }, setTitle: async () => {}, setBadgeText: async () => {} },
     contextMenus: { removeAll: async () => {}, create: (_entry, callback) => callback(), onClicked: event("menu") },
     system: { display: { getInfo: async () => structuredClone(displays) } },
     tabs: {
       async get(id) { if (!tabs.has(id)) throw new Error("Tab closed."); return structuredClone(tabs.get(id)); },
-      async query(query) { return [...tabs.values()].filter((tab) => (!query.active || tab.active) && (query.windowId === undefined || query.windowId === tab.windowId)).map((tab) => structuredClone(tab)); },
+      async query(query) {
+        const matched = [...tabs.values()].filter((tab) => (!query.active || tab.active) && (query.windowId === undefined || query.windowId === tab.windowId));
+        if (omitCreatedRuleDialogFromQuery && query.windowId >= 100) return [];
+        return matched.map((tab) => structuredClone(tab));
+      },
       async create(properties) {
         const windowId = 7;
         if (properties.active) for (const tab of tabs.values()) if (tab.windowId === windowId) tab.active = false;
@@ -123,7 +130,7 @@ async function browserFixture(rules = []) {
         const id = 100 + created;
         const window = { id, type: "popup", state: "normal", width: properties.width, height: properties.height, left: 0, top: 0 };
         windows.set(id, window);
-        tabs.set(id, { id, windowId: id, active: true, url: properties.url });
+        tabs.set(id, { id, windowId: id, active: true, url: createdPopupStartsBlank ? "about:blank" : properties.url });
         listeners.created?.(structuredClone(window));
         return structuredClone(window);
       },
@@ -132,7 +139,7 @@ async function browserFixture(rules = []) {
   };
   const source = (await readFile(new URL("../background/service-worker.js", import.meta.url), "utf8")).replace(/^import .*;\r?$/gm, "");
   const bindings = { ...storage, ...resolver, ...updater, ...manager, ...icons, ...menus, ...configModule, ...actions, ...matcher, ...diagnostics, ...session,
-    windowBoundsChanged, APP_VERSION: "test", chrome: globalThis.chrome, Date, structuredClone,
+    windowBoundsChanged, APP_VERSION: "test", chrome: globalThis.chrome, Date, URL, structuredClone,
     setTimeout: (callback) => { const id = ++nextTimer; timers.set(id, callback); return id; }, clearTimeout: (id) => timers.delete(id) };
   let context = vm.createContext(bindings);
   vm.runInContext(source, context);
@@ -144,13 +151,16 @@ async function browserFixture(rules = []) {
   }
 
   await settle();
-  return { local, ephemeral, windows, tabs, updates, iconUpdates, messages, listeners, created: () => created,
+  return { local, ephemeral, windows, tabs, updates, iconUpdates, messages, listeners, created: () => created, optionsOpened: () => optionsOpened,
+    omitCreatedRuleDialogFromQuery: (value) => { omitCreatedRuleDialogFromQuery = value; },
+    createdPopupStartsBlank: (value) => { createdPopupStartsBlank = value; },
     restart: async () => { context = vm.createContext({ ...bindings }); vm.runInContext(source, context); await settle(); },
     editor: async (tabId = 1) => {
       const dispatch = (...args) => vm.runInContext("dispatchRequest", context)(...args);
       await dispatch({ type: "open-rule-editor", tabId });
-      const dialog = [...tabs.values()].find((tab) => tab.url === `chrome-extension://test/rule-delete/rule-delete.html?tabId=${tabId}`);
-      return { dialog, dispatch: (message) => dispatch({ tabId, ...message }, { tab: structuredClone(dialog) }) };
+      const dialog = [...tabs.values()].find((tab) => tab.url?.startsWith(`chrome-extension://test/rule-delete/rule-delete.html?tabId=${tabId}&sourceWindowId=7&editorToken=`));
+      const editorToken = new URL(dialog.url).searchParams.get("editorToken");
+      return { dialog, editorToken, dispatch: (message) => dispatch({ tabId, sourceWindowId: 7, editorToken, editorTabId: dialog.id, editorWindowId: dialog.windowId, ...message }, { tab: structuredClone(dialog) }) };
     },
     apply: (...args) => vm.runInContext("applyForTab", context)(...args), dispatch: (...args) => vm.runInContext("dispatchRequest", context)(...args),
     flush: (id) => vm.runInContext("inWindow", context)(id, () => vm.runInContext("flushPendingBounds", context)(id)), settle,
@@ -225,6 +235,219 @@ test("concurrent rule and About open requests create one instance of each dialog
 });
 
 
+test("a failed rule-dialog initialization records its browser phase and captured source context", async () => {
+  const browser = await browserFixture();
+  browser.omitCreatedRuleDialogFromQuery(true);
+  const response = await browser.request({ type: "open-rule-editor", tabId: 1 });
+  assert.equal(response.ok, false);
+  assert.equal(response.error, "The rule dialog could not be initialized.");
+  const [entry] = await diagnostics.loadDiagnostics();
+  assert.equal(entry.operation, "open-rule-editor");
+  assert.equal(entry.technical.context.phase, "find-dialog-tab");
+  assert.deepEqual(entry.technical.context.source, { tabId: 1, windowId: 7, url: "https://alpha.example/news/item" });
+  assert.equal(entry.technical.context.editor.windowId, 101);
+  assert.deepEqual(entry.technical.context.browserResult.queryDialogTabs.tabs, []);
+});
+
+
+test("a Firefox about:blank popup remains the reserved editor until its token handshake completes", async () => {
+  const browser = await browserFixture();
+  browser.createdPopupStartsBlank(true);
+  await browser.dispatch({ type: "open-rule-editor", tabId: 1 });
+  assert.equal(browser.created(), 1);
+  const [opening] = Object.values(browser.ephemeral.ruleEditors.entries);
+  assert.equal(opening.status, "opening");
+  assert.equal(opening.windowId, 101);
+  assert.equal(opening.dialogId, 101);
+  assert.equal(opening.lifecycle.initialTabUrl, "about:blank");
+  await browser.dispatch({ type: "open-rule-editor", tabId: 1 });
+  assert.equal(browser.created(), 1);
+  assert.equal(browser.updates.at(-1).id, 101);
+  browser.tabs.get(opening.dialogId).url = `chrome-extension://test/rule-delete/rule-delete.html?tabId=1&sourceWindowId=7&editorToken=${opening.token}`;
+  const state = await browser.dispatch({ type: "get-rule-editor-state", tabId: 1, sourceWindowId: 7, editorToken: opening.token,
+    editorTabId: opening.dialogId, editorWindowId: opening.windowId });
+  assert.equal(state.sourceValid, true);
+  assert.equal(state.writable, true);
+  const [opened] = Object.values(browser.ephemeral.ruleEditors.entries);
+  assert.equal(opened.status, "open");
+  assert.equal(opened.lifecycle.transition, "opening -> open");
+});
+
+
+test("closing a Firefox about:blank popup releases its opening editor reservation", async () => {
+  const browser = await browserFixture();
+  browser.createdPopupStartsBlank(true);
+  await browser.dispatch({ type: "open-rule-editor", tabId: 1 });
+  const [opening] = Object.values(browser.ephemeral.ruleEditors.entries);
+  browser.tabs.delete(opening.dialogId);
+  browser.windows.delete(opening.windowId);
+  browser.listeners.removed(opening.windowId);
+  await browser.settle();
+  assert.deepEqual(browser.ephemeral.ruleEditors.entries, {});
+  await browser.dispatch({ type: "open-rule-editor", tabId: 1 });
+  assert.equal(browser.created(), 2);
+});
+
+
+test("a rule dialog preserves its captured HTTP source context after the active tab changes", async () => {
+  const browser = await browserFixture();
+  const source = structuredClone(browser.tabs.get(1));
+  await browser.dispatch({ type: "open-rule-editor", tabId: source.id, sourceWindowId: source.windowId, sourceUrl: source.url });
+  const dialog = [...browser.tabs.values()].find((tab) => tab.url?.startsWith("chrome-extension://test/rule-delete/rule-delete.html?tabId=1&sourceWindowId=7&editorToken="));
+  const editorToken = new URL(dialog.url).searchParams.get("editorToken");
+  assert.equal(new URL(dialog.url).searchParams.get("sourceUrl"), source.url);
+  const entry = Object.values(browser.ephemeral.ruleEditors.entries).find((candidate) => candidate.token === editorToken);
+  assert.deepEqual({ sourceId: entry.sourceId, sourceWindowId: entry.sourceWindowId, url: entry.url }, { sourceId: 1, sourceWindowId: 7, url: source.url });
+  assert.equal(entry.token, editorToken);
+  browser.tabs.get(1).active = false;
+  browser.tabs.get(2).active = true;
+  const state = await browser.dispatch({ type: "get-rule-editor-state", tabId: 1, sourceWindowId: 7, editorToken }, { tab: structuredClone(dialog) });
+  assert.equal(state.url, source.url);
+  assert.equal(state.sourceValid, true);
+  const prepared = await browser.dispatch({ type: "prepare-site-rule", tabId: 1, sourceWindowId: 7, editorToken, url: source.url, scope: "domain_tree", rememberPosition: false, rememberMonitor: false }, { tab: structuredClone(dialog) });
+  assert.equal(prepared.rule.scope.type, "domain_tree");
+});
+
+
+test("a direct rule-dialog request without a captured source context remains blocked", async () => {
+  const browser = await browserFixture();
+  const sender = { tab: { id: 901, windowId: 902, url: "chrome-extension://test/rule-delete/rule-delete.html?tabId=1" } };
+  await assert.rejects(browser.dispatch({ type: "get-rule-editor-state", tabId: 1 }, sender), /Reopen this rule dialog/);
+});
+
+
+test("closing a source tab retains its editor only long enough to report the specific Save error", async () => {
+  const browser = await browserFixture();
+  const writer = await browser.editor(1);
+  browser.tabs.delete(1);
+  browser.listeners.tabRemoved(1);
+  await browser.settle();
+  const closed = await writer.dispatch({ type: "get-rule-editor-state" });
+  assert.equal(closed.sourceValid, false);
+  assert.equal(closed.writable, false);
+  browser.tabs.set(1, { id: 1, windowId: 7, active: true, url: "https://alpha.example/new" });
+  await browser.dispatch({ type: "open-rule-editor", tabId: 1 });
+  assert.equal(browser.created(), 2);
+});
+
+
+test("the Options action uses the browser-neutral runtime options API", async () => {
+  const browser = await browserFixture();
+  assert.equal((await browser.dispatch({ type: "open-options" })).ok, true);
+  assert.equal(browser.optionsOpened(), 1);
+});
+
+
+test("a Firefox-style internal dialog sender without sender.tab uses its saved token context", async () => {
+  const browser = await browserFixture();
+  const writer = await browser.editor();
+  const state = await browser.dispatch({ type: "get-rule-editor-state", tabId: 1, sourceWindowId: 7, editorToken: writer.editorToken }, {});
+  assert.equal(state.url, "https://alpha.example/news/item");
+  assert.equal(state.writable, true);
+  const prepared = await browser.dispatch({ type: "prepare-site-rule", tabId: 1, sourceWindowId: 7, editorToken: writer.editorToken, url: state.url, scope: "domain_tree", rememberPosition: false, rememberMonitor: false }, {});
+  assert.equal(prepared.rule.scope.value, "alpha.example");
+});
+
+
+test("a Firefox sender tab cannot invalidate a legitimate token-bound rule dialog", async () => {
+  const browser = await browserFixture();
+  const writer = await browser.editor();
+  const state = await browser.dispatch({ type: "get-rule-editor-state", tabId: 1, sourceWindowId: 7, editorToken: writer.editorToken },
+    { tab: { id: 1, windowId: 7, url: "https://alpha.example/news/item" } });
+  assert.equal(state.url, "https://alpha.example/news/item");
+  assert.equal(state.writable, true);
+});
+
+
+test("Firefox background restart recovers an opening registry record from the dialog token", async () => {
+  const browser = await browserFixture();
+  const writer = await browser.editor();
+  const entry = Object.values(browser.ephemeral.ruleEditors.entries).find((candidate) => candidate.token === writer.editorToken);
+  entry.status = "opening";
+  entry.windowId = null;
+  entry.dialogId = null;
+  await browser.restart();
+  const state = await writer.dispatch({ type: "get-rule-editor-state" });
+  assert.equal(state.url, "https://alpha.example/news/item");
+  assert.equal(state.sourceValid, true);
+  assert.equal(state.writable, true);
+  const recovered = Object.values(browser.ephemeral.ruleEditors.entries).find((candidate) => candidate.token === writer.editorToken);
+  assert.equal(recovered.status, "open");
+  assert.equal(recovered.windowId, writer.dialog.windowId);
+  await browser.dispatch({ type: "open-rule-editor", tabId: 1 });
+  assert.equal(browser.created(), 1);
+  assert.equal(browser.updates.at(-1).id, writer.dialog.windowId);
+  assert.equal(browser.updates.at(-1).patch.focused, true);
+});
+
+
+test("a recent pending reservation blocks another create until it expires", async () => {
+  const browser = await browserFixture();
+  const writer = await browser.editor();
+  browser.tabs.delete(writer.dialog.id);
+  browser.windows.delete(writer.dialog.windowId);
+  const entry = Object.values(browser.ephemeral.ruleEditors.entries).find((candidate) => candidate.token === writer.editorToken);
+  entry.status = "opening";
+  entry.openingAt = Date.now();
+  entry.windowId = null;
+  entry.dialogId = null;
+  const pending = await browser.dispatch({ type: "open-rule-editor", tabId: 1 });
+  assert.equal(pending.pending, true);
+  assert.equal(browser.created(), 1);
+  const stored = Object.values(browser.ephemeral.ruleEditors.entries).find((candidate) => candidate.token === writer.editorToken);
+  assert.ok(stored);
+  stored.openingAt = Date.now() - 31000;
+  await browser.dispatch({ type: "open-rule-editor", tabId: 1 });
+  assert.equal(browser.created(), 2);
+});
+
+
+test("a stale closed editor mapping is removed before a replacement is created", async () => {
+  const browser = await browserFixture();
+  const writer = await browser.editor();
+  browser.tabs.delete(writer.dialog.id);
+  browser.windows.delete(writer.dialog.windowId);
+  await browser.dispatch({ type: "open-rule-editor", tabId: 1 });
+  assert.equal(browser.created(), 2);
+  const entries = Object.values(browser.ephemeral.ruleEditors.entries);
+  assert.equal(entries.length, 1);
+  assert.notEqual(entries[0].token, writer.editorToken);
+});
+
+
+test("closing one editor removes only its source mapping and leaves the other live", async () => {
+  const browser = await browserFixture();
+  browser.tabs.set(3, { id: 3, windowId: 7, active: false, url: "https://gamma.example/" });
+  const first = await browser.editor(1);
+  const second = await browser.editor(3);
+  browser.tabs.delete(first.dialog.id);
+  browser.windows.delete(first.dialog.windowId);
+  browser.listeners.removed(first.dialog.windowId);
+  await browser.settle();
+  const entries = Object.values(browser.ephemeral.ruleEditors.entries);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].token, second.editorToken);
+  assert.equal((await second.dispatch({ type: "get-rule-editor-state" })).sourceValid, true);
+});
+
+
+test("Set and Edit requests share one reserved editor key for the same source tab", async () => {
+  const browser = await browserFixture();
+  await Promise.all([
+    browser.dispatch({ type: "open-rule-editor", tabId: 1 }),
+    browser.dispatch({ type: "open-rule-editor", tabId: 1, sourceWindowId: 7, sourceUrl: "https://alpha.example/news/item" })
+  ]);
+  assert.equal(browser.created(), 1);
+  const [entry] = Object.values(browser.ephemeral.ruleEditors.entries);
+  assert.equal(entry.sourceKey, "7:1");
+  assert.equal(entry.status, "opening");
+  await browser.dispatch({ type: "open-rule-editor", tabId: 1 });
+  assert.equal(browser.created(), 1);
+  assert.equal(browser.updates.at(-1).id, entry.windowId);
+  assert.equal(browser.updates.at(-1).patch.focused, true);
+});
+
+
 test("About and Configuration can focus one packaged local README tab", async () => {
   const browser = await browserFixture();
   await browser.dispatch({ type: "open-local-readme" });
@@ -274,6 +497,83 @@ test("rule Save applies immediately; navigation, disabled state, and conflicts r
   browser.tabs.get(1).url = "https://elsewhere.example/";
   await assert.rejects(editor.dispatch({ type: "save-site-rules", url: state.url, baseRules: [edited], rules: [] }), /source page changed/);
   assert.equal(browser.local.smartWindowSizeConfig.rules[0].width, 1000);
+});
+
+
+test("Rules Save uses its bound source session while the editor or another source-window tab has focus", async () => {
+  const saved = rule();
+  const browser = await browserFixture([saved]);
+  const editor = await browser.editor();
+  const state = await editor.dispatch({ type: "get-rule-editor-state" });
+  browser.tabs.get(1).active = false;
+  browser.tabs.get(2).active = true;
+  browser.windows.get(7).width = 975;
+  const edited = { ...saved, width: 975 };
+  await editor.dispatch({ type: "save-site-rules", url: state.url, baseRules: state.rules, rules: [edited] });
+  assert.equal(browser.local.smartWindowSizeConfig.rules.find((item) => item.id === saved.id).width, 975);
+  assert.equal(browser.tabs.get(1).active, false);
+  assert.equal(browser.tabs.get(2).active, true);
+  assert.equal(browser.local.smartWindowSizeConfig.rules[0].scope.value, "alpha.example");
+});
+
+
+test("Rules Save reports a closed bound source tab without substituting another active tab", async () => {
+  const browser = await browserFixture([rule()]);
+  const editor = await browser.editor();
+  const state = await editor.dispatch({ type: "get-rule-editor-state" });
+  browser.tabs.delete(1);
+  browser.listeners.tabRemoved(1);
+  browser.tabs.get(2).active = true;
+  const response = await browser.request({ type: "save-site-rules", tabId: 1, sourceWindowId: 7, editorToken: editor.editorToken,
+    editorTabId: editor.dialog.id, editorWindowId: editor.dialog.windowId, url: state.url, baseRules: state.rules, rules: state.rules });
+  assert.equal(response.ok, false);
+  assert.match(response.error, /source tab was closed/);
+  assert.equal(browser.local.smartWindowSizeConfig.rules[0].scope.value, "alpha.example");
+  const [entry] = await diagnostics.loadDiagnostics();
+  assert.equal(entry.technical.context.validation, "source-tab-closed");
+  assert.equal(entry.technical.context.activeTab.tabId, 2);
+});
+
+
+test("Rules Save rejects an invalid editor token without accepting the active tab as a replacement", async () => {
+  const browser = await browserFixture([rule()]);
+  const editor = await browser.editor();
+  const state = await editor.dispatch({ type: "get-rule-editor-state" });
+  browser.tabs.get(1).active = false;
+  browser.tabs.get(2).active = true;
+  const response = await browser.request({ type: "save-site-rules", tabId: 1, sourceWindowId: 7, editorToken: "invalid-token",
+    editorTabId: editor.dialog.id, editorWindowId: editor.dialog.windowId, url: state.url, baseRules: state.rules, rules: state.rules });
+  assert.equal(response.ok, false);
+  assert.match(response.error, /Reopen this rule dialog/);
+  const [entry] = await diagnostics.loadDiagnostics();
+  assert.equal(entry.technical.context.validation, "editor-session-token-or-ownership");
+  assert.equal(entry.technical.context.activeTab.tabId, 2);
+  assert.equal(browser.local.smartWindowSizeConfig.rules[0].scope.value, "alpha.example");
+});
+
+
+test("browser-neutral navigation applies a matching rule to its source window without editor-session dependency", async () => {
+  const browser = await browserFixture([rule()]);
+  const source = browser.tabs.get(1);
+  browser.listeners.updated(source.id, { status: "complete" }, structuredClone(source));
+  await browser.settle();
+  assert.equal(browser.windows.get(7).width, 800);
+  assert.equal(browser.windows.get(7).height, 600);
+  assert.equal(browser.updates.at(-1).id, 7);
+  assert.deepEqual(browser.updates.at(-1).patch, { width: 800, height: 600, left: 200, top: 100 });
+
+  const editor = await browser.editor();
+  browser.windows.get(7).width = 1100;
+  browser.listeners.updated(source.id, { status: "complete" }, structuredClone(source));
+  await browser.settle();
+  assert.equal(editor.dialog.windowId > 7, true);
+  assert.equal(browser.windows.get(7).width, 800);
+
+  const before = browser.updates.length;
+  browser.tabs.get(1).url = "https://unmatched.example/";
+  browser.listeners.updated(source.id, { status: "complete" }, structuredClone(browser.tabs.get(1)));
+  await browser.settle();
+  assert.equal(browser.updates.length, before);
 });
 
 
@@ -406,7 +706,7 @@ test("only one editor can mutate; observers can focus it and Configuration canno
   assert.equal(browser.updates.at(-1).patch.focused, true);
   await browser.dispatch({ type: "resize-window", windowId: 7, width: 920, height: 720 });
   assert.equal(browser.local.smartWindowSizeConfig.rules[0].width, 920);
-  assert.equal(browser.ephemeral.ruleEditors.owner, writer.dialog.id);
+  assert.equal(browser.ephemeral.ruleEditors.owner, writer.editorToken);
 });
 
 
@@ -448,7 +748,7 @@ test("source URL remains pinned after navigation or closure; no dialog can spoof
 });
 
 
-test("ownership is reconstructed from session state and stale dialog records are discarded", async () => {
+test("ownership is reconstructed from session state and closed dialog windows release their records", async () => {
   const browser = await browserFixture();
   const writer = await browser.editor();
   const reader = await browser.editor(2);
@@ -456,12 +756,11 @@ test("ownership is reconstructed from session state and stale dialog records are
   await browser.restart();
   browser.ephemeral.ruleEditors = session;
   assert.equal((await writer.dispatch({ type: "get-rule-editor-state" })).writable, true);
-  writer.dialog.pendingUrl = writer.dialog.url;
-  browser.tabs.get(writer.dialog.id).pendingUrl = writer.dialog.url;
-  browser.tabs.get(writer.dialog.id).url = "";
   assert.equal((await browser.dispatch({ type: "get-configuration" })).rulesLocked, true);
-  browser.tabs.get(writer.dialog.id).url = "chrome-extension://test/about/about.html";
-  delete browser.tabs.get(writer.dialog.id).pendingUrl;
+  browser.tabs.delete(writer.dialog.id);
+  browser.windows.delete(writer.dialog.windowId);
+  browser.listeners.removed(writer.dialog.windowId);
+  await browser.settle();
   assert.equal((await reader.dispatch({ type: "get-rule-editor-state" })).hasOwner, false);
   await assert.rejects(writer.dispatch({ type: "save-site-rules" }), /Reopen/);
 });

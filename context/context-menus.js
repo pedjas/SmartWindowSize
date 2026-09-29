@@ -75,13 +75,15 @@ export async function refreshSiteRuleMenu(tab) {
 export async function createContextMenus(currentTab = undefined) {
   const config = await loadConfig();
   const canSetRules = config.global.enabled && (currentTab ? Boolean(toUrl(currentTab.url)) : await activeTabSupportsRules().catch(() => false));
+  const usesFirefoxOptions = typeof chrome.runtime.getBrowserInfo === "function";
   await chrome.contextMenus.removeAll();
   const entries = [
     { id: "global-enabled", type: "checkbox", title: "Extension enabled", checked: config.global.enabled, contexts: ["action"] },
-    { id: "global-separator", type: "separator", contexts: ["action"] },
+    ...(!usesFirefoxOptions ? [{ id: "global-separator", type: "separator", contexts: ["action"] }] : []),
     { id: "bring-window-on-screen", title: "Bring window on screen", enabled: config.global.enabled, contexts: ["action"] },
     { id: "delete-matching-rules", title: "Set rules for this site", enabled: canSetRules, contexts: ["action"] },
-    { id: "window-separator", type: "separator", contexts: ["action"] },
+    ...(!usesFirefoxOptions ? [{ id: "window-separator", type: "separator", contexts: ["action"] }] : []),
+    ...(usesFirefoxOptions ? [{ id: "open-options", title: "Options", contexts: ["action"] }] : []),
     { id: "about", title: "About SmartWindowSize", contexts: ["action"] }
   ];
   for (const entry of entries) await createContextMenu(entry);
@@ -97,11 +99,12 @@ async function handleContextMenuClick(info, tab, dispatch) {
   });
   if (info.menuItemId === "global-enabled") return requestMenuAction({ type: "set-global-enabled", enabled: info.checked });
   if (info.menuItemId === "about") return requestMenuAction({ type: "open-about", tabId: tab?.id });
+  if (info.menuItemId === "open-options") return requestMenuAction({ type: "open-options" });
   const targetTab = await resolveContextMenuTab(tab, (queryInfo) => chrome.tabs.query(queryInfo));
   if (!Number.isInteger(targetTab?.id)) throw new Error("No active browser tab is available for this action.");
   if (info.menuItemId === "delete-matching-rules") {
     if (!toUrl(targetTab.url)) return;
-    return requestMenuAction({ type: "open-rule-editor", tabId: targetTab.id });
+    return requestMenuAction({ type: "open-rule-editor", tabId: targetTab.id, sourceWindowId: targetTab.windowId, sourceUrl: targetTab.url });
   }
   const actionType = info.menuItemId === "bring-window-on-screen" ? "bring-window-on-screen" : null;
   if (actionType) {

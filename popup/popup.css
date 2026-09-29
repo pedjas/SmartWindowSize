@@ -6,3 +6,8 @@ label { display: grid; gap: 4px; }
 select { min-width: 250px; }
 button { background: #fff; border: 1px solid #94a3b8; border-radius: 5px; padding: 8px; text-align: left; cursor: pointer; }
 button:hover { background: #eef6ff; }
+
+/* Follow the browser or system theme instead of relying on a browser-specific popup canvas. */
+:root { color-scheme: light dark; }
+body { color: CanvasText; background: Canvas; }
+button, button:hover { color: ButtonText; background: ButtonFace; border-color: ButtonBorder; }

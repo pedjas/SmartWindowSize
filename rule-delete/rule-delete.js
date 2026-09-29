@@ -11,6 +11,27 @@ import { request, installClientErrors, runClientAction, showClientError } from "
 /** Browser tab identifier whose matching rules are being edited. @type {number} */
 const tabId = Number(new URL(location.href).searchParams.get("tabId") ?? NaN);
 
+/** Browser window identifier captured with the source tab at the user action. @type {number} */
+const sourceWindowId = Number(new URL(location.href).searchParams.get("sourceWindowId") ?? NaN);
+
+/** Opaque token that binds this internal page to the source context captured when the dialog opened. @type {string|undefined} */
+const editorToken = new URL(location.href).searchParams.get("editorToken") ?? undefined;
+
+/** Immutable source URL copied into the dialog URL when the user opens Set rules. @type {string} */
+const capturedSourceUrl = new URL(location.href).searchParams.get("sourceUrl") ?? "";
+
+
+/** Resolves the internal extension tab identity used to complete the background editor handshake. @type {Promise<{editorTabId?: number, editorWindowId?: number}>} */
+const editorIdentity = typeof chrome.tabs?.getCurrent === "function"
+  ? chrome.tabs.getCurrent().then((tab) => Number.isInteger(tab?.id) && Number.isInteger(tab?.windowId) ? { editorTabId: tab.id, editorWindowId: tab.windowId } : {}).catch(() => ({}))
+  : Promise.resolve({});
+
+
+/** Sends a rule-editor request with immutable source binding and the internal tab handshake identity. @param {object} message Rule-editor request fields. @returns {Promise<object>} Background response. */
+async function requestEditor(message) {
+  return request({ ...message, tabId, sourceWindowId, editorToken, ...await editorIdentity });
+}
+
 
 /** Human-readable labels keyed by persisted coverage type. @type {Record<string, string>} */
 const labels = Object.freeze({
@@ -183,7 +204,7 @@ function synchronizeScopeSelection() {
 
 /** Samples current source-window bounds and creates a staged rule. @param {object|null} existing Existing staged rule, if any. @returns {Promise<object>} Rule ready for staging, not yet persisted. */
 async function ruleFromEditor(existing) {
-  const response = await request({ type: "prepare-site-rule", tabId, url: state.url, scope: scopeInput.value, rememberPosition: positionInput.checked, rememberMonitor: monitorInput.checked, existing });
+  const response = await requestEditor({ type: "prepare-site-rule", url: state.url, scope: scopeInput.value, rememberPosition: positionInput.checked, rememberMonitor: monitorInput.checked, existing });
   return response.rule;
 }
 
@@ -197,7 +218,7 @@ async function load() {
 /** Refreshes access and observers without overwriting the writable draft. @param {boolean} replaceDraft Explicit reload or initial load. @param {string} type State or acquisition request. @returns {Promise<void>} Render completion. */
 function refresh(replaceDraft = false, type = "get-rule-editor-state") {
   const work = refreshQueue.catch(() => undefined).then(async () => {
-    const next = await request({ type, tabId });
+    const next = await requestEditor({ type });
     const preserve = state?.ownsEditor && next.ownsEditor && !replaceDraft;
     state = preserve ? { ...next, rules: state.rules } : next;
     if (!preserve) {
@@ -224,6 +245,7 @@ function refresh(replaceDraft = false, type = "get-rule-editor-state") {
 
 /** Initializes the dialog caption without repeating the application name in its body. */
 document.title = `SmartWindowSize ${APP_VERSION} — Set rules for this site`;
+document.querySelector("#source-url").textContent = capturedSourceUrl;
 installClientErrors(document.querySelector("#error"));
 for (const button of document.querySelectorAll("button")) button.title ||= button.textContent.trim();
 
@@ -260,7 +282,7 @@ document.querySelector("#save").addEventListener("click", async () => {
   busy = true;
   synchronizeScopeSelection();
   await runClientAction("Save site rules", async () => {
-    await request({ type: "save-site-rules", tabId, url: state.url, rules: state.rules, baseRules });
+    await requestEditor({ type: "save-site-rules", url: state.url, rules: state.rules, baseRules });
     window.close();
   });
   busy = false;
@@ -273,7 +295,7 @@ document.querySelector("#bring-to-front").addEventListener("click", async () => 
 document.querySelector("#reload").addEventListener("click", () => {
   if (!busy && (!state?.ownsEditor || !hasUnsavedChanges() || confirm("Discard staged changes and reload the current rules?"))) runClientAction("Reload rules", load);
 });
-document.querySelector("#focus-editor").addEventListener("click", () => runClientAction("Focus editable dialog", () => request({ type: "focus-rule-editor", tabId })));
+document.querySelector("#focus-editor").addEventListener("click", () => runClientAction("Focus editable dialog", () => requestEditor({ type: "focus-rule-editor" })));
 document.querySelector("#enable-editing").addEventListener("click", async () => {
   if (busy || state?.hasOwner || !state?.sourceValid || !state?.enabled) return;
   busy = true;
