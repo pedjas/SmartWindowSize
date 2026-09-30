@@ -1,0 +1,171 @@
+SmartWindowSize Source-Available License 1.0
+
+Copyright (c) 2026 pedjas
+
+All rights reserved except as expressly granted by this license.
+
+1. PURPOSE
+
+SmartWindowSize is distributed as source-available software.
+
+The source code is publicly available so that users and developers may inspect the software, learn from its implementation, report issues, and contribute improvements to the official SmartWindowSize project.
+
+This license is not an Open Source Initiative (OSI) approved open-source license.
+
+
+2. PERMITTED USE
+
+You may use the official SmartWindowSize software free of charge for personal and non-commercial purposes.
+
+You may download and install official releases of SmartWindowSize and make reasonable backup copies for your own use.
+
+Commercial use requires prior written permission from the copyright holder.
+
+
+3. SOURCE CODE ACCESS
+
+You may view, download, and study the SmartWindowSize source code.
+
+You may make private copies of the source code for development, testing, research, security review, and preparation of contributions to the official SmartWindowSize project.
+
+
+4. DEVELOPMENT FORKS AND CONTRIBUTIONS
+
+You may fork or clone the official SmartWindowSize source repository for the purpose of:
+
+- studying the source code;
+- developing bug fixes;
+- developing improvements or new features;
+- testing proposed changes; and
+- submitting contributions to the official SmartWindowSize repository.
+
+Public development forks are permitted when they are maintained primarily for contributing changes to the official SmartWindowSize project.
+
+A development fork must clearly identify itself as a fork of SmartWindowSize and must not represent itself as an independent, official, endorsed, or alternative distribution of SmartWindowSize.
+
+Permission to maintain a development fork does not grant permission to publish or distribute that fork as a separate software product.
+
+
+5. CONTRIBUTIONS
+
+Contributions to the official SmartWindowSize project may be submitted through pull requests or other contribution mechanisms accepted by the project maintainer.
+
+By intentionally submitting a contribution to the official SmartWindowSize project, you grant the copyright holder a perpetual, worldwide, non-exclusive, irrevocable, royalty-free license to use, reproduce, modify, integrate, distribute, sublicense, and otherwise use your contribution as part of SmartWindowSize and related versions of the project.
+
+You retain copyright in your own contribution.
+
+Submitting a contribution does not grant you ownership of the SmartWindowSize project, its name, branding, or code written by other contributors.
+
+
+6. NO REDISTRIBUTION
+
+Except for development forks permitted by Section 4, you may not distribute, publish, provide, sublicense, sell, rent, lease, host for distribution, or otherwise make available copies of SmartWindowSize or modified versions of SmartWindowSize without prior written permission from the copyright holder.
+
+In particular, you may not distribute SmartWindowSize or a modified version through:
+
+- browser extension stores;
+- software repositories or download sites;
+- application stores;
+- package repositories;
+- commercial products or services; or
+- another website or distribution channel.
+
+This restriction applies whether the distribution is free of charge or commercial.
+
+Linking to the official SmartWindowSize repository or official distribution locations is permitted.
+
+
+7. NO REBRANDING
+
+You may not rename, rebrand, or present SmartWindowSize or a modified version of SmartWindowSize as a different product for distribution.
+
+You may not use the SmartWindowSize source code to create and distribute another browser extension, application, product, or service under another name without prior written permission from the copyright holder.
+
+
+8. SMARTWINDOWSIZE NAME AND BRANDING
+
+This license does not grant any right to use the SmartWindowSize name, logo, icons, visual identity, or other project branding for another product or distribution.
+
+Development forks permitted by this license may use the SmartWindowSize name only as reasonably necessary to identify their relationship to the original project, for example:
+
+"Development fork of SmartWindowSize"
+
+Such use must not imply endorsement or official status.
+
+
+9. COMMERCIAL USE
+
+You may not use SmartWindowSize or substantial portions of its source code as part of a commercial product, paid service, commercial browser extension, or other revenue-generating offering without prior written permission from the copyright holder.
+
+You may not sell SmartWindowSize, sell access to SmartWindowSize, charge a license fee for SmartWindowSize, or commercially distribute a modified version of SmartWindowSize.
+
+Commercial licensing may be available separately from the copyright holder.
+
+
+10. MODIFIED VERSIONS
+
+You may create modified versions privately for development, testing, research, and contribution purposes permitted by this license.
+
+You may not publicly distribute a modified version as a usable alternative to the official SmartWindowSize software without prior written permission from the copyright holder.
+
+Nothing in this section prevents you from publishing source-code changes in a development fork for the purpose of discussion, review, testing, or submission to the official project, subject to Section 4.
+
+
+11. NO SUBLICENSING
+
+The permissions granted by this license are personal to the recipient and do not include the right to sublicense SmartWindowSize or grant additional rights in SmartWindowSize to another party.
+
+
+12. THIRD-PARTY COMPONENTS
+
+This license applies only to portions of SmartWindowSize for which the SmartWindowSize copyright holder has the authority to grant these rights.
+
+Third-party libraries, code, assets, or other components included with the project may be subject to their own licenses. Those licenses continue to apply to those components.
+
+
+13. OTHER RIGHTS
+
+No rights are granted except those expressly stated in this license.
+
+Nothing in this license is intended to restrict rights that cannot lawfully be restricted by copyright license, including any applicable statutory exceptions or limitations.
+
+
+14. TERMINATION
+
+Your rights under this license terminate automatically if you violate its terms.
+
+Upon termination, you must stop any activity that depended on permissions granted by this license and cease unauthorized distribution or commercial use of SmartWindowSize.
+
+The copyright holder may separately grant permission to resume such activities.
+
+
+15. NO WARRANTY
+
+SmartWindowSize is provided "AS IS", without warranty of any kind, express or implied, including but not limited to warranties of merchantability, fitness for a particular purpose, non-infringement, availability, or correctness.
+
+You use the software at your own risk.
+
+
+16. LIMITATION OF LIABILITY
+
+To the maximum extent permitted by applicable law, the copyright holder and contributors shall not be liable for any claim, damages, or other liability arising from or related to the software or its use.
+
+
+17. SEPARATE PERMISSIONS AND COMMERCIAL LICENSING
+
+The copyright holder may grant additional permissions or alternative license terms separately.
+
+Requests for commercial use, redistribution, integration into another product, rebranding, or other uses not permitted by this license must receive prior written permission from the copyright holder.
+
+
+18. OFFICIAL PROJECT
+
+The official SmartWindowSize project is maintained at:
+
+https://github.com/pedjas/SmartWindowSize
+
+Copies, forks, mirrors, or modified versions hosted elsewhere are not official distributions unless explicitly designated as such by the copyright holder.
+
+
+SmartWindowSize Source-Available License 1.0
+Copyright (c) 2026 pedjas
