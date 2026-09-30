@@ -261,9 +261,11 @@ export async function bringWindowOnScreen(windowId, canApply = async () => true)
  * @param {{status: string, rule?: object, size?: {width: number, height: number}}} resolved Rule resolution result.
  * @param {Function} canApply Last-moment source-tab and configuration check.
  * @param {boolean} useSavedPosition Whether this is a new browser window that may restore a saved position.
+ * @param {(operation: string, context: object) => void} trace Optional non-fatal runtime trace observer.
+ * @param {(updateInfo: {width: number, height: number, left: number, top: number}) => Promise<void>} beforeWindowUpdate Optional lifecycle hook that records an expected extension geometry before the browser update.
  * @returns {Promise<{changed: boolean, sizeAdjusted: boolean, size: {width: number, height: number}}>} Applied result.
  */
-export async function applyResolvedRule(windowId, resolved, canApply = async () => true, useSavedPosition = false) {
+export async function applyResolvedRule(windowId, resolved, canApply = async () => true, useSavedPosition = false, trace = () => {}, beforeWindowUpdate = async () => {}) {
   if (resolved.status === "DISABLED") return { changed: false };
   const rule = resolved.rule;
   const current = await chrome.windows.get(windowId);
@@ -271,12 +273,31 @@ export async function applyResolvedRule(windowId, resolved, canApply = async () 
   const desired = rule ? { width: rule.width, height: rule.height } : resolved.size ?? { width: current.width, height: current.height };
   const display = await displayForRule(rule, current);
   const bounds = constrainWindowBounds(current, desired, rule, display, useSavedPosition);
-  if (!await canApply()) return { changed: false, skipped: "source-changed" };
+  const updateInfo = windowUpdateInfo(bounds);
+  trace("RULE_TARGET_COMPUTED", { windowId, target: { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height, state: current.state }, desired, sizeAdjusted: bounds.sizeAdjusted });
+  if (!await canApply()) {
+    trace("RULE_WINDOW_UPDATE_SKIPPED", { windowId, updateInfo, reason: "The source tab or resolved configuration changed before windows.update." });
+    return { changed: false, skipped: "source-changed" };
+  }
   if (current.width === bounds.width && current.height === bounds.height && current.left === bounds.left && current.top === bounds.top) {
+    trace("RULE_WINDOW_UPDATE_SKIPPED", { windowId, updateInfo, reason: "The current browser bounds already equal the computed target." });
     return { changed: false, sizeAdjusted: bounds.sizeAdjusted, size: { width: bounds.width, height: bounds.height } };
   }
-  await chrome.windows.update(windowId, windowUpdateInfo(bounds));
-  const actual = await chrome.windows.get(windowId);
+  trace("RULE_WINDOW_UPDATE_BEGIN", { windowId, updateInfo });
+  let actual;
+  try {
+    await beforeWindowUpdate(updateInfo);
+    actual = await chrome.windows.update(windowId, updateInfo);
+  } catch (error) {
+    trace("RULE_WINDOW_UPDATE_ERROR", {
+      windowId,
+      updateInfo,
+      exception: { name: error?.name ?? "Error", message: error?.message ?? String(error), stack: error?.stack ?? null }
+    });
+    throw error;
+  }
+  trace("RULE_WINDOW_UPDATE_RESULT", { windowId, updateInfo, returnedWindow: actual });
+  actual = await chrome.windows.get(windowId);
   if (display && !isWindowOnDisplay(actual, display)) throw new Error("The browser did not apply bounds inside the selected display.");
   if (actual.width !== bounds.width || actual.height !== bounds.height) throw new Error("The browser did not apply the requested rule dimensions.");
   return { changed: true, sizeAdjusted: bounds.sizeAdjusted, size: { width: actual.width, height: actual.height }, actual };

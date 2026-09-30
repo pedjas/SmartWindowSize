@@ -75,10 +75,12 @@ function formatDiagnostic(entry) {
 /** Renders the current session-only diagnostic log in Configuration. @returns {Promise<void>} Completes after the DOM reflects the latest entries. */
 async function renderDiagnostics() {
   const response = await request({ type: "get-diagnostics" });
-  diagnostics = response?.entries ?? [];
-  document.querySelector("#diagnostic-status").textContent = diagnostics.length ? `${diagnostics.length} error${diagnostics.length === 1 ? "" : "s"} recorded in this browser session.` : "No errors recorded in this browser session.";
+  diagnostics = (response?.entries ?? []).filter((entry) => entry.kind === "error");
+  document.querySelector("#diagnostic-status").textContent = diagnostics.length
+    ? `${diagnostics.length} error${diagnostics.length === 1 ? "" : "s"} recorded in this browser session.`
+    : "No diagnostics available.";
   document.querySelector("#diagnostic-log").textContent = diagnostics.length ? diagnostics.map(formatDiagnostic).join("\n\n") : "No diagnostics available.";
-  document.querySelector("#diagnostics-tab").classList.toggle("has-errors", diagnostics.length > 0);
+  document.querySelector("#diagnostics-tab").classList.remove("has-errors");
 }
 
 

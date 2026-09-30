@@ -28,7 +28,7 @@ function rule(type = "domain_tree", value = "alpha.example", width = 800) {
 
 
 /** Creates an isolated browser fixture with real background business logic. @param {object[]} rules Initial rules. @returns {Promise<object>} Mutable browser controls and request API. */
-async function browserFixture(rules = []) {
+async function browserFixture(rules = [], useFirefoxWindowEvents = false, firefoxHasBoundsChanged = true) {
   const config = configModule.createDefaultConfig();
   config.rules = rules;
   config.global.ruleRetentionDays = -1;
@@ -72,7 +72,7 @@ async function browserFixture(rules = []) {
         }
         listeners.storage?.(changes, area);
       },
-      async remove(key) { delete data[key]; }
+      async remove(key) { for (const item of Array.isArray(key) ? key : [key]) delete data[item]; }
     };
   }
 
@@ -134,12 +134,19 @@ async function browserFixture(rules = []) {
         listeners.created?.(structuredClone(window));
         return structuredClone(window);
       },
-      onCreated: event("created"), onBoundsChanged: event("bounds"), onRemoved: event("removed")
+      onCreated: event("created"), onBoundsChanged: event("bounds"), onFocusChanged: event("focus"), onRemoved: event("removed")
     }
   };
   const source = (await readFile(new URL("../background/service-worker.js", import.meta.url), "utf8")).replace(/^import .*;\r?$/gm, "");
+  const firefoxWindowEvents = useFirefoxWindowEvents ? {
+    onCreated: globalThis.chrome.windows.onCreated,
+    onFocusChanged: globalThis.chrome.windows.onFocusChanged,
+    onRemoved: globalThis.chrome.windows.onRemoved,
+    ...(firefoxHasBoundsChanged ? { onBoundsChanged: globalThis.chrome.windows.onBoundsChanged } : {})
+  } : undefined;
   const bindings = { ...storage, ...resolver, ...updater, ...manager, ...icons, ...menus, ...configModule, ...actions, ...matcher, ...diagnostics, ...session,
     windowBoundsChanged, APP_VERSION: "test", chrome: globalThis.chrome, Date, URL, structuredClone,
+    browser: firefoxWindowEvents ? { windows: firefoxWindowEvents } : undefined,
     setTimeout: (callback) => { const id = ++nextTimer; timers.set(id, callback); return id; }, clearTimeout: (id) => timers.delete(id) };
   let context = vm.createContext(bindings);
   vm.runInContext(source, context);
@@ -241,7 +248,7 @@ test("a failed rule-dialog initialization records its browser phase and captured
   const response = await browser.request({ type: "open-rule-editor", tabId: 1 });
   assert.equal(response.ok, false);
   assert.equal(response.error, "The rule dialog could not be initialized.");
-  const [entry] = await diagnostics.loadDiagnostics();
+  const entry = (await diagnostics.loadDiagnostics()).find((item) => item.operation === "open-rule-editor");
   assert.equal(entry.operation, "open-rule-editor");
   assert.equal(entry.technical.context.phase, "find-dialog-tab");
   assert.deepEqual(entry.technical.context.source, { tabId: 1, windowId: 7, url: "https://alpha.example/news/item" });
@@ -484,6 +491,206 @@ test("editing a matching parent retains identity and samples fresh source bounds
 });
 
 
+for (const [width, height] of [[1508, 543], [1200, 700], [1000, 500], [1600, 900]]) {
+  test(`captured ${width} by ${height} outer geometry persists and reapplies without transformation`, async () => {
+    const browser = await browserFixture();
+    await diagnostics.clearDiagnostics();
+    Object.assign(browser.windows.get(7), { width, height });
+    const editor = await browser.editor();
+    const state = await editor.dispatch({ type: "get-rule-editor-state" });
+    const prepared = await editor.dispatch({ type: "prepare-site-rule", url: state.url, scope: "domain_tree", rememberPosition: false, rememberMonitor: false });
+    assert.deepEqual({ width: prepared.rule.width, height: prepared.rule.height }, { width, height });
+    await editor.dispatch({ type: "save-site-rules", url: state.url, baseRules: state.rules, rules: [prepared.rule] });
+    const stored = browser.local.smartWindowSizeConfig.rules.find((item) => item.id === prepared.rule.id);
+    assert.deepEqual({ width: stored.width, height: stored.height }, { width, height });
+    Object.assign(browser.windows.get(7), { width: 900, height: 600 });
+    await browser.apply(browser.tabs.get(1));
+    assert.deepEqual({ width: browser.windows.get(7).width, height: browser.windows.get(7).height }, { width, height });
+  });
+}
+
+
+test.skip("retired lifecycle trace instrumentation", async () => {
+  const saved = rule("domain_tree", "tracked.example", 1508);
+  saved.height = 543;
+  const browser = await browserFixture([saved]);
+  await diagnostics.clearDiagnostics();
+  const window = { id: 8, type: "normal", state: "normal", left: 48, top: 72, width: 900, height: 700, focused: true };
+  const tab = { id: 3, windowId: 8, active: true, url: "about:blank", status: "loading" };
+  browser.windows.set(window.id, window);
+  browser.tabs.set(tab.id, tab);
+  browser.listeners.created(structuredClone(window));
+  await browser.settle();
+  tab.url = "https://tracked.example/";
+  tab.status = "complete";
+  browser.listeners.updated(tab.id, { url: tab.url, status: "complete" }, structuredClone(tab));
+  await browser.settle();
+  Object.assign(window, { left: 64, top: 80, width: 1450, height: 520 });
+  browser.listeners.bounds(structuredClone(window));
+  await browser.settle();
+  await chrome.windows.remove(8);
+  await browser.settle();
+  const traces = (await diagnostics.loadDiagnostics()).filter((entry) => entry.kind === "trace");
+  const operations = traces.map((entry) => entry.operation);
+  for (const operation of ["RETIRED_TRACE"]) {
+    assert.ok(operations.includes(operation), `Expected ${operation} trace.`);
+  }
+  const created = traces.find((entry) => entry.operation === "RETIRED_TRACE");
+  assert.equal(created.technical.context.currentTabUrl, "about:blank");
+  const matched = traces.find((entry) => entry.operation === "RETIRED_TRACE");
+  assert.deepEqual(matched.technical.context.savedTarget, { width: 1508, height: 543 });
+  const removed = traces.find((entry) => entry.operation === "RETIRED_TRACE");
+  assert.deepEqual(removed.technical.context.lastKnownGeometry, { width: 1450, height: 520, left: 64, top: 80, state: "normal" });
+  const rawRemoved = traces.find((entry) => entry.operation === "RETIRED_TRACE");
+  assert.equal(rawRemoved.technical.context.windowId, 8);
+  assert.equal(typeof rawRemoved.technical.context.timestamp, "string");
+  const trackedLookup = traces.find((entry) => entry.operation === "RETIRED_TRACE");
+  assert.equal(trackedLookup.technical.context.trackedFound, true);
+  assert.deepEqual(trackedLookup.technical.context.lastKnownGeometry, { width: 1450, height: 520, left: 64, top: 80, state: "normal" });
+  const persisted = traces.find((entry) => entry.operation === "RETIRED_TRACE");
+  assert.deepEqual({ width: persisted.technical.context.width, height: persisted.technical.context.height }, { width: 1450, height: 520 });
+  const ordering = ["RETIRED_TRACE"]
+    .map((operation) => operations.indexOf(operation));
+  assert.deepEqual(ordering, [...ordering].sort((left, right) => left - right));
+  assert.deepEqual({ width: browser.local.smartWindowSizeConfig.rules[0].width, height: browser.local.smartWindowSizeConfig.rules[0].height }, { width: 1450, height: 520 });
+  const reopenedWindow = { id: 9, type: "normal", state: "normal", left: 100, top: 100, width: 900, height: 700, focused: true };
+  const reopenedTab = { id: 4, windowId: 9, active: true, url: "https://tracked.example/", status: "complete" };
+  browser.windows.set(reopenedWindow.id, reopenedWindow);
+  browser.tabs.set(reopenedTab.id, reopenedTab);
+  browser.listeners.created(structuredClone(reopenedWindow));
+  browser.listeners.updated(reopenedTab.id, { url: reopenedTab.url, status: "complete" }, structuredClone(reopenedTab));
+  await browser.settle();
+  assert.deepEqual({ width: reopenedWindow.width, height: reopenedWindow.height }, { width: 1450, height: 520 });
+  assert.equal(browser.ephemeral.retiredDiagnosticWindows?.[8], undefined);
+});
+
+
+test.skip("retired close trace instrumentation", async () => {
+  const saved = rule("domain_tree", "tracked.example", 900);
+  saved.height = 600;
+  const browser = await browserFixture([saved], true);
+  await diagnostics.clearDiagnostics();
+  await browser.restart();
+  await browser.settle();
+  const window = { id: 8, type: "normal", state: "normal", left: 20, top: 30, width: 900, height: 600, focused: true };
+  const tab = { id: 3, windowId: 8, active: true, url: "https://tracked.example/", status: "complete" };
+  browser.windows.set(8, window);
+  browser.tabs.set(3, tab);
+  browser.listeners.created(structuredClone(window));
+  browser.listeners.updated(3, { url: tab.url, status: "complete" }, structuredClone(tab));
+  await browser.settle();
+  Object.assign(window, { width: 1182, height: 712 });
+  await browser.runTimers();
+  await browser.runTimers();
+  await browser.restart();
+  await browser.settle();
+  await chrome.windows.remove(8);
+  await browser.settle();
+  assert.deepEqual({ width: browser.local.smartWindowSizeConfig.rules[0].width, height: browser.local.smartWindowSizeConfig.rules[0].height }, { width: 1182, height: 712 });
+  assert.deepEqual(browser.local["retired.lastWindowRemoved"], { windowId: 8, timestamp: browser.local["retired.lastWindowRemoved"].timestamp });
+  assert.ok((await diagnostics.loadDiagnostics()).some((entry) => entry.operation === "RETIRED_TRACE"));
+  await diagnostics.clearDiagnostics();
+  await browser.restart();
+  await browser.settle();
+  const operations = (await diagnostics.loadDiagnostics()).map((entry) => entry.operation);
+  assert.ok(operations.includes("RETIRED_TRACE"));
+  assert.equal(browser.local["retired.lastWindowRemoved"], undefined);
+});
+
+
+/** Attaches one normal tracked test window to the real background event flow. @param {object} browser Browser fixture. @param {number} windowId Browser window identifier. @param {number} tabId Browser tab identifier. @returns {Promise<object>} Mutable window fixture. */
+async function attachTrackedWindow(browser, windowId, tabId) {
+  const window = { id: windowId, type: "normal", state: "normal", left: 20, top: 30, width: 900, height: 600, focused: true };
+  const tab = { id: tabId, windowId, active: true, url: "https://tracked.example/", status: "complete" };
+  browser.windows.set(windowId, window);
+  browser.tabs.set(tabId, tab);
+  browser.listeners.created(structuredClone(window));
+  browser.listeners.updated(tabId, { url: tab.url, status: "complete" }, structuredClone(tab));
+  await browser.settle();
+  return window;
+}
+
+
+test("Firefox polling persists the final manual geometry without recording a programmatic apply", async () => {
+  const saved = rule("domain_tree", "tracked.example", 800);
+  saved.height = 600;
+  const browser = await browserFixture([saved], true);
+  const window = await attachTrackedWindow(browser, 8, 3);
+  await browser.runTimers();
+  assert.deepEqual({ width: browser.local.smartWindowSizeConfig.rules[0].width, height: browser.local.smartWindowSizeConfig.rules[0].height }, { width: 800, height: 600 });
+  Object.assign(window, { width: 1182, height: 712 });
+  await browser.runTimers();
+  await browser.runTimers();
+  assert.deepEqual({ width: browser.local.smartWindowSizeConfig.rules[0].width, height: browser.local.smartWindowSizeConfig.rules[0].height }, { width: 1182, height: 712 });
+  assert.equal((await diagnostics.loadDiagnostics()).length, 0);
+});
+
+
+test.skip("retired Firefox trace instrumentation", async () => {
+  const saved = rule("domain_tree", "tracked.example", 800);
+  saved.height = 600;
+  const browser = await browserFixture([saved], true, false);
+  await browser.request({ type: "clear-diagnostics" });
+  const window = await attachTrackedWindow(browser, 8, 3);
+  await browser.settle();
+  await browser.runTimers();
+  assert.deepEqual({ width: browser.local.smartWindowSizeConfig.rules[0].width, height: browser.local.smartWindowSizeConfig.rules[0].height }, { width: 800, height: 600 });
+  Object.assign(window, { width: 1182, height: 712 });
+  await browser.runTimers();
+  await browser.runTimers();
+  assert.deepEqual({ width: browser.local.smartWindowSizeConfig.rules[0].width, height: browser.local.smartWindowSizeConfig.rules[0].height }, { width: 1182, height: 712 });
+  const operations = (await diagnostics.loadDiagnostics()).map((entry) => entry.operation);
+  const listenerStatus = (await diagnostics.loadDiagnostics()).find((entry) => entry.operation === "RETIRED_TRACE");
+  assert.equal(listenerStatus.technical.context.listenerRegistered, false);
+  assert.ok(!operations.includes("RETIRED_TRACE"));
+});
+
+
+test.skip("retired polling trace instrumentation", async () => {
+  const saved = rule("domain_tree", "tracked.example", 800);
+  saved.height = 600;
+  const browser = await browserFixture([saved], true);
+  await diagnostics.clearDiagnostics();
+  const first = await attachTrackedWindow(browser, 8, 3);
+  Object.assign(first, { width: 901, height: 601 });
+  Object.assign(first, { width: 902, height: 602 });
+  Object.assign(first, { width: 903, height: 603 });
+  await browser.runTimers();
+  await browser.runTimers();
+  assert.deepEqual({ width: browser.local.smartWindowSizeConfig.rules[0].width, height: browser.local.smartWindowSizeConfig.rules[0].height }, { width: 903, height: 603 });
+  const second = await attachTrackedWindow(browser, 9, 4);
+  Object.assign(second, { width: 1104, height: 704 });
+  await browser.runTimers();
+  await browser.runTimers();
+  assert.deepEqual({ width: browser.local.smartWindowSizeConfig.rules[0].width, height: browser.local.smartWindowSizeConfig.rules[0].height }, { width: 1104, height: 704 });
+});
+
+
+test.skip("retired Chromium trace instrumentation", async () => {
+  const saved = rule("domain_tree", "tracked.example", 800);
+  saved.height = 600;
+  saved.position = { enabled: true, x: 20, y: 30 };
+  const browser = await browserFixture([saved]);
+  await diagnostics.clearDiagnostics();
+  const window = await attachTrackedWindow(browser, 8, 3);
+  Object.assign(window, { left: 145, top: 155, width: 1060, height: 710 });
+  browser.listeners.bounds(structuredClone(window));
+  await browser.settle();
+  await browser.runTimers();
+  const stored = browser.local.smartWindowSizeConfig.rules[0];
+  assert.deepEqual({ width: stored.width, height: stored.height }, { width: 1060, height: 710 });
+  assert.deepEqual(stored.position, { enabled: true, x: 145, y: 155 });
+  const operations = (await diagnostics.loadDiagnostics()).map((entry) => entry.operation);
+  assert.ok(operations.includes("RETIRED_TRACE"));
+  assert.deepEqual(browser.local["retired.lastBoundsChanged"], {
+    windowId: 8, width: 1060, height: 710, left: 145, top: 155,
+    timestamp: browser.local["retired.lastBoundsChanged"].timestamp
+  });
+  const response = await browser.request({ type: "get-diagnostics" });
+  assert.ok(response.entries.some((entry) => entry.operation === "RETIRED_TRACE"));
+});
+
+
 test("rule Save applies immediately; navigation, disabled state, and conflicts reject writes", async () => {
   const saved = rule();
   const browser = await browserFixture([saved]);
@@ -529,7 +736,7 @@ test("Rules Save reports a closed bound source tab without substituting another 
   assert.equal(response.ok, false);
   assert.match(response.error, /source tab was closed/);
   assert.equal(browser.local.smartWindowSizeConfig.rules[0].scope.value, "alpha.example");
-  const [entry] = await diagnostics.loadDiagnostics();
+  const entry = (await diagnostics.loadDiagnostics()).find((item) => item.operation === "save-site-rules");
   assert.equal(entry.technical.context.validation, "source-tab-closed");
   assert.equal(entry.technical.context.activeTab.tabId, 2);
 });
@@ -545,7 +752,7 @@ test("Rules Save rejects an invalid editor token without accepting the active ta
     editorTabId: editor.dialog.id, editorWindowId: editor.dialog.windowId, url: state.url, baseRules: state.rules, rules: state.rules });
   assert.equal(response.ok, false);
   assert.match(response.error, /Reopen this rule dialog/);
-  const [entry] = await diagnostics.loadDiagnostics();
+  const entry = (await diagnostics.loadDiagnostics()).find((item) => item.operation === "save-site-rules");
   assert.equal(entry.technical.context.validation, "editor-session-token-or-ownership");
   assert.equal(entry.technical.context.activeTab.tabId, 2);
   assert.equal(browser.local.smartWindowSizeConfig.rules[0].scope.value, "alpha.example");
@@ -554,6 +761,7 @@ test("Rules Save rejects an invalid editor token without accepting the active ta
 
 test("browser-neutral navigation applies a matching rule to its source window without editor-session dependency", async () => {
   const browser = await browserFixture([rule()]);
+  await diagnostics.clearDiagnostics();
   const source = browser.tabs.get(1);
   browser.listeners.updated(source.id, { status: "complete" }, structuredClone(source));
   await browser.settle();
@@ -561,7 +769,6 @@ test("browser-neutral navigation applies a matching rule to its source window wi
   assert.equal(browser.windows.get(7).height, 600);
   assert.equal(browser.updates.at(-1).id, 7);
   assert.deepEqual(browser.updates.at(-1).patch, { width: 800, height: 600, left: 200, top: 100 });
-
   const editor = await browser.editor();
   browser.windows.get(7).width = 1100;
   browser.listeners.updated(source.id, { status: "complete" }, structuredClone(source));
@@ -631,7 +838,7 @@ test("Bring without display data reports unverified fallback instead of claiming
   const response = await browser.request({ type: "bring-window-on-screen", windowId: 7 });
   assert.equal(response.ok, false);
   assert.match(response.error, /visibility cannot be verified/);
-  assert.equal((await diagnostics.loadDiagnostics()).length, 1);
+  assert.equal((await diagnostics.loadDiagnostics()).filter((entry) => entry.kind === "error").length, 1);
 });
 
 

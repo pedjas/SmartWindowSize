@@ -31,6 +31,7 @@ export async function loadDiagnostics(includeUrls = false) {
   await diagnosticQueue;
   const entries = await readEntries();
   return includeUrls ? entries : entries.map((entry) => {
+    if (entry.kind === "trace") return entry;
     const redacted = redactDiagnosticValue(entry);
     if (typeof entry?.technical?.context?.source?.url === "string") redacted.technical.context.source.url = entry.technical.context.source.url;
     return redacted;
@@ -102,6 +103,7 @@ export async function recordDiagnostic(operation, error, debug = false, context 
     const raw = String(error?.message ?? error);
     const message = debug ? raw : hideUrls(raw);
     const entry = {
+      kind: "error",
       occurredAt: new Date().toISOString(),
       operation: (debug ? operation : hideUrls(operation)).slice(0, 200),
       message: message.slice(0, 4000),

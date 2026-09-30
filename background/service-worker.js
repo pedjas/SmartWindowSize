@@ -1,5 +1,5 @@
 /**
- * SmartWindowSize | Version: 1.0.37 | Last updated: 2026-09-29 17:33:00 +02:00
+ * SmartWindowSize | Version: 1.0.49 | Last updated: 2026-09-30 13:05:00 +02:00
  *
  * Coordinates serialized window operations, validated configuration writes,
  * unique dialogs, and session diagnostics.
@@ -35,6 +35,33 @@ const changingWindows = new Set();
 
 /** Last observed active tab in each browser window, including its URL at event time. @type {Map<number, object>} */
 const activeTabs = new Map();
+
+/** Uses Firefox's native browser.windows event surface when available and Chromium's chrome.windows surface otherwise. @type {object} */
+const browserWindowEvents = globalThis.browser?.windows ?? chrome.windows;
+
+/** Whether this runtime exposes Firefox's browser namespace. @type {boolean} */
+const isFirefoxWindowRuntime = Boolean(globalThis.browser?.windows);
+
+/** Optional committed-bounds event provided by Chromium but not Firefox WebExtensions. @type {object|undefined} */
+const boundsChangedEvent = browserWindowEvents?.onBoundsChanged;
+
+/** Session key for normal site windows whose matching rules need geometry persistence. @type {string} */
+const GEOMETRY_TRACKS_KEY = "geometryTracks";
+
+/** Per-window timers that persist one stabilized user geometry. @type {Map<number, ReturnType<typeof setTimeout>>} */
+const geometryDebounceTimers = new Map();
+
+/** Per-window lightweight Firefox polling timers for tracked normal site windows. @type {Map<number, ReturnType<typeof setTimeout>>} */
+const geometryPollTimers = new Map();
+
+/** Delay after the final observed user geometry change before persistence. @type {number} */
+const GEOMETRY_DEBOUNCE_MS = 150;
+
+/** Firefox fallback interval for one tracked normal site window. @type {number} */
+const GEOMETRY_POLL_MS = 750;
+
+/** Serializes session-backed geometry tracking records. @type {Promise<unknown>} */
+let geometryTrackQueue = Promise.resolve();
 
 /** In-flight unique-dialog opens, keyed by the dialog identity. @type {Map<string, Promise<unknown>>} */
 const dialogOpens = new Map();
@@ -338,7 +365,7 @@ function notifyDiagnostics() {
 
 /** Refreshes every icon without recursively logging icon failures. @param {object} config Latest configuration. @returns {Promise<void>} Completion. */
 async function refreshActionIcons(config) {
-  const hasErrors = (await loadDiagnostics()).length > 0;
+  const hasErrors = (await loadDiagnostics()).some((entry) => entry.kind !== "trace");
   const failures = await updateDefaultActionIcon(config.global.enabled, hasErrors);
   for (const tab of await chrome.tabs.query({})) {
     if (Number.isInteger(tab.id)) failures.push(...await updateActionIcon(tab.id, resolveRule(tab.url ?? "", config), hasErrors));
@@ -385,8 +412,183 @@ function attachRuleEditorDiagnosticContext(error, context) {
 
 /** Applies one tab icon without interrupting window recovery on icon failure. @param {number} tabId Tab ID. @param {object} resolved Resolution. @returns {Promise<void>} Completion. */
 async function synchronizeActionIcon(tabId, resolved) {
-  const failures = await updateActionIcon(tabId, resolved, (await loadDiagnostics()).length > 0);
+  const failures = await updateActionIcon(tabId, resolved, (await loadDiagnostics()).some((entry) => entry.kind !== "trace"));
   for (const failure of failures) await reportDiagnostic(failure.operation, failure.error);
+}
+
+
+/** Converts browser outer-window geometry into a small copyable capture record. @param {object|undefined} window Browser window returned by the WebExtensions API. @returns {{width: number|null, height: number|null, left: number|null, top: number|null, state: string|null}|null} Geometry when a window is available. */
+function capturedWindowGeometry(window) {
+  if (!window) return null;
+  return {
+    width: Number.isInteger(window.width) ? window.width : null,
+    height: Number.isInteger(window.height) ? window.height : null,
+    left: Number.isInteger(window.left) ? window.left : null,
+    top: Number.isInteger(window.top) ? window.top : null,
+    state: typeof window.state === "string" ? window.state : null
+  };
+}
+
+
+/** Serializes mutations to session-backed tracked normal-window geometry records. @param {Function} operation Receives mutable records keyed by browser window ID. @returns {Promise<unknown>} Operation result. */
+function withGeometryTracks(operation) {
+  const work = geometryTrackQueue.catch(() => undefined).then(async () => {
+    const tracks = await readSession(GEOMETRY_TRACKS_KEY) ?? {};
+    const result = await operation(tracks);
+    await writeSession(GEOMETRY_TRACKS_KEY, tracks);
+    return result;
+  });
+  geometryTrackQueue = work;
+  return work;
+}
+
+
+/** Schedules one Firefox fallback observation for a tracked normal site window. @param {number} windowId Browser window identifier. @returns {void} Schedules at most one follow-up observation. */
+function scheduleFirefoxGeometryPoll(windowId) {
+  if (!isFirefoxWindowRuntime || geometryPollTimers.has(windowId)) return;
+  geometryPollTimers.set(windowId, setTimeout(async () => {
+    geometryPollTimers.delete(windowId);
+    try {
+      const tracks = await readSession(GEOMETRY_TRACKS_KEY) ?? {};
+      if (!tracks[windowId]) return;
+      await observeTrackedWindowGeometry(windowId);
+      scheduleFirefoxGeometryPoll(windowId);
+    } catch {
+      // A closed tracked window ends its polling cycle without creating a diagnostic error.
+    }
+  }, GEOMETRY_POLL_MS));
+}
+
+
+/** Starts or refreshes tracking for a normal active site window with a resolved enabled rule. @param {object} tab Active site tab. @param {object} window Browser window. @param {string} ruleId Resolved rule identifier. @returns {Promise<void>} Completion after session tracking is stored. */
+async function trackWindowGeometry(tab, window, ruleId) {
+  if (!isFirefoxWindowRuntime || !isSiteWindow(window) || window.state !== "normal" || !tab?.url || !ruleId) return;
+  const geometry = capturedWindowGeometry(window);
+  await withGeometryTracks((tracks) => {
+    const previous = tracks[window.id] ?? {};
+    tracks[window.id] = {
+      ...previous,
+      windowId: window.id,
+      tabId: tab.id,
+      url: tab.url,
+      ruleId,
+      lastKnownGeometry: geometry,
+      lastGeometryReadAt: new Date().toISOString()
+    };
+  });
+  scheduleFirefoxGeometryPoll(window.id);
+}
+
+
+/** Checks whether an observed geometry is the expected result of a recent SmartWindowSize update. @param {number} windowId Browser window identifier. @param {object} geometry Current observed geometry. @returns {Promise<boolean>} Whether persistence must be suppressed. */
+async function isExpectedProgrammaticGeometry(windowId, geometry) {
+  const state = await readSession(windowKey(windowId));
+  return Boolean(state?.until > Date.now() && geometryMatchesExpected(state.expected, geometry));
+}
+
+
+/** Persists one stabilized tracked window geometry and reports only failures through production Diagnostics. @param {object} track Tracked normal window state. @returns {Promise<void>} Completion after the configuration write and read-back validation. */
+async function persistTrackedGeometry(track) {
+  const geometry = track?.lastKnownGeometry;
+  if (!track?.url || !geometry || geometry.state !== "normal" || !Number.isInteger(geometry.width) || !Number.isInteger(geometry.height)) return;
+  try {
+    let updatedRuleId = null;
+    const saved = await updateConfig((config) => {
+      const update = updateRuleForResize(config, { url: track.url, position: { x: geometry.left, y: geometry.top } }, geometry.width, geometry.height);
+      updatedRuleId = update.rule?.id ?? null;
+      return update.changed ? update.config : undefined;
+    });
+    const stored = updatedRuleId ? saved.rules.find((rule) => rule.id === updatedRuleId) ?? null : null;
+    if (!stored) throw new Error("No matching enabled rule accepted the tracked window geometry.");
+    if (stored.width !== geometry.width || stored.height !== geometry.height) throw new Error("Stored window geometry could not be verified.");
+  } catch (error) {
+    await reportDiagnostic("Persist window geometry", error);
+  }
+}
+
+
+/** Persists a pending generation only when it remains the latest user geometry observation. @param {number} windowId Browser window identifier. @param {number} generation Latest geometry generation. @returns {Promise<void>} Completion after persistence and session cleanup. */
+async function flushTrackedGeometry(windowId, generation) {
+  const track = await withGeometryTracks((tracks) => tracks[windowId]?.pendingGeneration === generation ? structuredClone(tracks[windowId]) : null);
+  if (!track) return;
+  await persistTrackedGeometry(track);
+  await withGeometryTracks((tracks) => {
+    if (tracks[windowId]?.pendingGeneration === generation) delete tracks[windowId].pendingGeneration;
+  });
+}
+
+
+/** Schedules persistence after a tracked user geometry remains stable briefly. @param {number} windowId Browser window identifier. @param {number} generation Latest user geometry generation. @returns {void} Replaces only this window's pending timer. */
+function scheduleTrackedGeometryPersistence(windowId, generation) {
+  clearTimeout(geometryDebounceTimers.get(windowId));
+  geometryDebounceTimers.set(windowId, setTimeout(() => {
+    geometryDebounceTimers.delete(windowId);
+    flushTrackedGeometry(windowId, generation).catch((error) => reportDiagnostic("Persist window geometry", error));
+  }, GEOMETRY_DEBOUNCE_MS));
+}
+
+
+/** Reads one tracked normal site window and schedules persistence only for a user-driven geometry change. @param {number} windowId Browser window identifier. @returns {Promise<object|null>} Current geometry when the tracked window remains available. */
+async function observeTrackedWindowGeometry(windowId) {
+  const tracks = await readSession(GEOMETRY_TRACKS_KEY) ?? {};
+  if (!tracks[windowId]) return null;
+  const window = await chrome.windows.get(windowId);
+  if (!isSiteWindow(window) || window.state !== "normal") return null;
+  const geometry = capturedWindowGeometry(window);
+  const programmatic = await isExpectedProgrammaticGeometry(windowId, geometry);
+  const result = await withGeometryTracks((mutable) => {
+    const track = mutable[windowId];
+    if (!track) return null;
+    const changed = fingerprint(track.lastKnownGeometry) !== fingerprint(geometry);
+    track.lastKnownGeometry = geometry;
+    track.lastGeometryReadAt = new Date().toISOString();
+    if (changed && !programmatic) track.pendingGeneration = (track.pendingGeneration ?? 0) + 1;
+    return { changed, generation: track.pendingGeneration ?? null };
+  });
+  if (result?.changed && !programmatic && result.generation !== null) scheduleTrackedGeometryPersistence(windowId, result.generation);
+  return geometry;
+}
+
+
+/** Flushes a pending final geometry before removing a closed window's tracking state. @param {number} windowId Closed browser window identifier. @returns {Promise<void>} Completion after best-effort persistence and cleanup. */
+async function releaseTrackedWindowGeometry(windowId) {
+  clearTimeout(geometryPollTimers.get(windowId));
+  geometryPollTimers.delete(windowId);
+  clearTimeout(geometryDebounceTimers.get(windowId));
+  geometryDebounceTimers.delete(windowId);
+  const track = await withGeometryTracks((tracks) => tracks[windowId] ? structuredClone(tracks[windowId]) : null);
+  if (track?.pendingGeneration) await persistTrackedGeometry(track);
+  await withGeometryTracks((tracks) => { delete tracks[windowId]; });
+}
+
+
+/** Restores Firefox-only tracked-window polling after an event-page restart. @returns {Promise<void>} Completion after live tracks are resumed or discarded. */
+async function resumeFirefoxGeometryPolling() {
+  if (!isFirefoxWindowRuntime) return;
+  const tracks = await readSession(GEOMETRY_TRACKS_KEY) ?? {};
+  for (const [id, track] of Object.entries(tracks)) {
+    const windowId = Number(id);
+    if (!Number.isInteger(windowId)) continue;
+    try {
+      const window = await chrome.windows.get(windowId);
+      if (!isSiteWindow(window) || window.state !== "normal") {
+        await withGeometryTracks((mutable) => { delete mutable[windowId]; });
+        continue;
+      }
+      scheduleFirefoxGeometryPoll(windowId);
+      if (Number.isInteger(track.pendingGeneration)) scheduleTrackedGeometryPersistence(windowId, track.pendingGeneration);
+    } catch {
+      await withGeometryTracks((mutable) => { delete mutable[windowId]; });
+    }
+  }
+}
+
+
+/** Checks whether two outer-window geometry snapshots match within browser rounding tolerance. @param {object|null|undefined} expected Extension-requested geometry. @param {object|null|undefined} actual Browser-observed geometry. @returns {boolean} Whether the snapshots represent the same bounds. */
+function geometryMatchesExpected(expected, actual) {
+  if (!expected || !actual) return false;
+  return ["width", "height", "left", "top"].every((field) =>
+    Number.isInteger(expected[field]) && Number.isInteger(actual[field]) && Math.abs(expected[field] - actual[field]) <= 1);
 }
 
 
@@ -431,22 +633,24 @@ async function flushPendingBounds(id) {
 }
 
 
-/** Applies the active tab's latest rule inside the owning window queue. @param {object} tab Candidate tab. @param {boolean} useSavedPosition Whether a newly created browser window may restore a saved position. @returns {Promise<void>} Completion. */
-async function applyForTab(tab, useSavedPosition = false) {
+/** Applies the active tab's latest rule inside the owning window queue. @param {object} tab Candidate tab. @param {boolean} useSavedPosition Whether a newly created browser window may restore a saved position. @param {object} traceSource Browser event details that initiated this apply attempt. @returns {Promise<void>} Completion. */
+async function applyForTab(tab, useSavedPosition = false, traceSource = { eventName: "other", changeInfo: {} }) {
   if (!Number.isInteger(tab?.id) || tab.windowId === chrome.windows.WINDOW_ID_NONE) return;
   return inWindow(tab.windowId, async () => {
     await flushPendingBounds(tab.windowId);
     tab = await chrome.tabs.get(tab.id);
+    const window = await chrome.windows.get(tab.windowId);
+    const finalUrl = tab.url ?? "";
     if (!tab.active) return;
     activeTabs.set(tab.windowId, tab);
-    const window = await chrome.windows.get(tab.windowId);
     if (!isSiteWindow(window)) return;
     if (window.state !== "normal") {
       await writeSession(windowKey(window.id), { bounds: window, state: window.state });
       return;
     }
     const config = await loadConfig();
-    const resolved = resolveRule(tab.url ?? "", config);
+    const resolved = resolveRule(finalUrl, config);
+    if (resolved.status === "RULE") await trackWindowGeometry(tab, window, resolved.rule.id);
     await synchronizeActionIcon(tab.id, resolved);
     if (resolved.status === "DISABLED") {
       await writeSession(windowKey(window.id), { bounds: window, state: window.state });
@@ -459,7 +663,18 @@ async function applyForTab(tab, useSavedPosition = false) {
         fingerprint(resolveRule(tab.url ?? "", currentConfig)) === fingerprint(resolved);
     };
     if (!await canApply()) return;
-    const application = await changeWindow(tab.windowId, () => applyResolvedRule(tab.windowId, resolved, canApply, useSavedPosition));
+    const rememberExpectedGeometry = async (updateInfo) => {
+      if (resolved.status !== "RULE") return;
+      const current = await readSession(windowKey(tab.windowId)) ?? {};
+      await writeSession(windowKey(tab.windowId), {
+        ...current,
+        changing: true,
+        expected: { ...updateInfo, state: "normal" },
+        until: Date.now() + UPDATE_GRACE_MS,
+        expectedRuleId: resolved.rule.id
+      });
+    };
+    const application = await changeWindow(tab.windowId, () => applyResolvedRule(tab.windowId, resolved, canApply, useSavedPosition, undefined, rememberExpectedGeometry));
     if (resolved.status === "RULE" && application.sizeAdjusted) {
       await updateConfig((latest) => {
         const current = resolveRule(tab.url, latest);
@@ -824,11 +1039,12 @@ async function dispatchAction(message, sender, registry) {
     const existing = message.existing;
     const value = existing?.scope.type === type ? existing.scope.value : scopeForUrl(tab.url, type);
     const display = await displayForRule(null, current);
-    return { rule: { id: existing?.id ?? createRuleId(), scope: { type, value }, enabled: existing?.enabled ?? true,
+    const stagedRule = { id: existing?.id ?? createRuleId(), scope: { type, value }, enabled: existing?.enabled ?? true,
       width: current.width, height: current.height,
       position: message.rememberPosition ? { enabled: true, x: current.left, y: current.top } : { enabled: false, x: null, y: null },
       display: message.rememberMonitor && display ? { enabled: true, id: display.id } : { enabled: false, id: null },
-      lastUpdatedAt: new Date().toISOString() } };
+      lastUpdatedAt: new Date().toISOString() };
+    return { rule: stagedRule };
   }
   throw new Error("Unsupported extension request.");
 }
@@ -847,8 +1063,13 @@ function handleExtensionRequest(message, sender, sendResponse) {
 
 /** Initializes missing baselines without treating browser startup as a user resize. @returns {Promise<void>} Completion. */
 async function initialize() {
+  await chrome.storage.local.remove(["debug.lastWindowRemoved", "debug.lastBoundsChanged"]);
+  await removeSession("eliteDiagnosticWindows");
+  await resumeFirefoxGeometryPolling();
   const activeTabsAtStartup = await chrome.tabs.query({ active: true });
-  for (const tab of activeTabsAtStartup) activeTabs.set(tab.windowId, tab);
+  for (const tab of activeTabsAtStartup) {
+    activeTabs.set(tab.windowId, tab);
+  }
   for (const window of await chrome.windows.getAll({})) {
     await inWindow(window.id, async () => {
       if (!await readSession(windowKey(window.id))) await writeSession(windowKey(window.id), { bounds: window, state: window.state });
@@ -880,20 +1101,23 @@ chrome.tabs.onActivated.addListener(({ tabId }) => {
   chrome.tabs.get(tabId).then(async (tab) => {
     activeTabs.set(tab.windowId, tab);
     await refreshContextMenus(tab);
-    return applyForTab(tab);
+    return applyForTab(tab, false, { eventName: "tabs.onActivated", changeInfo: {} });
   }).catch((error) => reportDiagnostic("Activate tab rule", error));
 });
 chrome.tabs.onUpdated.addListener((_id, change, tab) => {
   if (change.url) withEditors(() => notifyRuleEditors()).catch((error) => reportDiagnostic("Refresh rule editors", error));
   if (tab.active) activeTabs.set(tab.windowId, tab);
   if (change.url && tab.active) refreshContextMenus(tab).catch((error) => reportDiagnostic("Refresh context menu", error));
-  if (change.url || change.status === "complete") applyForTab(tab, initializingWindows.has(tab.windowId)).catch((error) => reportDiagnostic("Load tab rule", error));
+  if (change.url || change.status === "complete") {
+    applyForTab(tab, initializingWindows.has(tab.windowId), { eventName: "tabs.onUpdated", changeInfo: { status: change.status ?? null, url: change.url ?? null } })
+      .catch((error) => reportDiagnostic("Load tab rule", error));
+  }
 });
 chrome.tabs.onRemoved.addListener((id) => {
   withEditors(() => notifyRuleEditors()).catch((error) => reportDiagnostic("Release rule editor", error));
   for (const [windowId, tab] of activeTabs) if (tab.id === id) activeTabs.delete(windowId);
 });
-chrome.windows.onCreated.addListener((window) => {
+browserWindowEvents.onCreated.addListener((window) => {
   if (!isSiteWindow(window)) return;
   initializingWindows.add(window.id);
   writeSession(`newWindow:${window.id}`, Date.now() + UPDATE_GRACE_MS).then(() => recoverNewWindow(window.id)).catch((error) => reportDiagnostic("Create window visibility", error)).finally(() => {
@@ -907,14 +1131,34 @@ chrome.windows.onCreated.addListener((window) => {
     }, 180));
   });
 });
-chrome.windows.onBoundsChanged.addListener((window) => {
-  const owner = activeTabs.get(window.id);
-  handleBoundsChanged(window, owner ? { ...owner } : null, changingWindows.has(window.id) || initializingWindows.has(window.id)).catch((error) => reportDiagnostic("Process window bounds", error));
-});
-chrome.windows.onRemoved.addListener((id) => {
-  takeDependentDialogsForClosedWindow(id).then((dialogWindowIds) => Promise.all(dialogWindowIds.map((dialogWindowId) =>
-    chrome.windows.remove(dialogWindowId).catch((error) => reportDiagnostic("Close dependent dialog", error))))).catch((error) => reportDiagnostic("Release dependent dialogs", error));
-  withEditors((registry) => {
+if (!isFirefoxWindowRuntime && typeof boundsChangedEvent?.addListener === "function") {
+  boundsChangedEvent.addListener((window) => {
+    const owner = activeTabs.get(window.id);
+    handleBoundsChanged(window, owner ? { ...owner } : null, changingWindows.has(window.id) || initializingWindows.has(window.id)).catch((error) => reportDiagnostic("Process window bounds", error));
+  });
+}
+browserWindowEvents.onRemoved.addListener(async (id) => {
+  try {
+    await releaseTrackedWindowGeometry(id);
+  } catch (error) {
+    await reportDiagnostic("Release tracked window geometry", error);
+  }
+  try {
+    await inWindow(id, async () => {
+      await flushPendingBounds(id);
+      await removeSession(windowKey(id));
+      await removeSession(`newWindow:${id}`);
+    });
+  } catch (error) {
+    await reportDiagnostic("Remove window state", error);
+  }
+  try {
+    const dialogWindowIds = await takeDependentDialogsForClosedWindow(id);
+    await Promise.all(dialogWindowIds.map((dialogWindowId) => chrome.windows.remove(dialogWindowId).catch((error) => reportDiagnostic("Close dependent dialog", error))));
+  } catch (error) {
+    await reportDiagnostic("Release dependent dialogs", error);
+  }
+  await withEditors((registry) => {
     for (const [tabId, entry] of Object.entries(registry.entries)) {
       if (entry.windowId === id) {
         clearRuleEditorOpeningTimeout(entry.token);
@@ -928,11 +1172,6 @@ chrome.windows.onRemoved.addListener((id) => {
   initializingWindows.delete(id);
   clearTimeout(creationTimers.get(id));
   creationTimers.delete(id);
-  inWindow(id, async () => {
-    await flushPendingBounds(id);
-    await removeSession(windowKey(id));
-    await removeSession(`newWindow:${id}`);
-  }).catch((error) => reportDiagnostic("Remove window state", error));
 });
 chrome.tabs.onRemoved.addListener((id) => {
   withEditors((registry) => {

@@ -4,6 +4,11 @@
 
 ### Changed
 
+- Keep Chromium geometry persistence on committed `windows.onBoundsChanged`
+  events and use session-backed polling only for tracked normal Firefox site
+  windows, where that event is unavailable.
+- Limit Diagnostics to actionable failures instead of successful lifecycle,
+  resize, apply, debounce, and persistence traces.
 - Keep Firefox toolbar actions flat by omitting only decorative separators,
   avoiding Firefox's automatic SmartWindowSize overflow submenu.
 - Add a Firefox-only `Options` toolbar context-menu action and make extension
