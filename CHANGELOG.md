@@ -18,6 +18,8 @@
 
 ### Fixed
 
+- Prevent browser and extension UI pages from triggering rule or automatic
+  window sizing, including hash navigation inside SmartWindowSize Configuration.
 - Preserve browser-neutral rule application through active-tab navigation while
   a Rules editor session exists, with regression coverage for source-window
   targeting and non-matching URLs.

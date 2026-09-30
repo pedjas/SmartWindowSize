@@ -228,3 +228,11 @@ the complete Configuration form. Concurrent settings changes are checked before
 saving, and rule updates from other windows are preserved. Diagnostics updates
 live and hides URLs unless debug is enabled. When session storage is unavailable,
 the temporary log and window state last only for the background process lifetime.
+
+## License
+
+SmartWindowSize is **source-available software**, not OSI-approved open-source software.
+
+The source code may be viewed, studied, and forked for development and contributions to the official project. Redistribution, rebranding, publication of modified versions as separate products, and commercial use are not permitted without prior written permission.
+
+See [LICENSE](LICENSE) for the complete license terms.

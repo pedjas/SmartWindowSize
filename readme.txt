@@ -120,3 +120,14 @@ Diagnostics are local to the browser session. You can review or clear them in
 the Diagnostics tab of Configuration.
 
 For updates and release notes, see the project page and CHANGELOG.md.
+
+
+License
+-------
+
+SmartWindowSize is source-available software, not OSI-approved open-source software.
+
+The source code may be viewed, studied, and forked for development and contributions to the official project. Redistribution, rebranding, publication of modified versions as separate products, and commercial use are not permitted without prior written permission.
+
+See LICENSE for the complete license terms.
+

@@ -819,6 +819,48 @@ test("default sizing and extension-generated bounds cannot create or overwrite r
 });
 
 
+test("browser and extension UI URLs never trigger website or automatic window sizing", async () => {
+  const browser = await browserFixture();
+  Object.assign(browser.local.smartWindowSizeConfig.global, { useDefaultSize: true, automaticWidth: 1400, automaticHeight: 800 });
+  const tab = browser.tabs.get(1);
+  const window = browser.windows.get(7);
+  const internalUrls = [
+    "moz-extension://test/options/options.html",
+    "moz-extension://test/options/options.html#configuration",
+    "moz-extension://test/options/options.html#rules",
+    "moz-extension://test/options/options.html#diagnostics",
+    "about:addons",
+    "about:debugging",
+    "chrome-extension://test/options/options.html",
+    "chrome://extensions",
+    "chrome://settings"
+  ];
+  for (const url of internalUrls) {
+    Object.assign(window, { width: 910, height: 710 });
+    tab.url = url;
+    const updateCount = browser.updates.length;
+    await browser.apply(tab);
+    assert.deepEqual({ width: window.width, height: window.height }, { width: 910, height: 710 }, url);
+    assert.equal(browser.updates.length, updateCount, url);
+  }
+});
+
+
+test("content URLs retain default and matching-rule sizing", async () => {
+  const browser = await browserFixture([rule("domain_tree", "matched.example", 1010)]);
+  Object.assign(browser.local.smartWindowSizeConfig.global, { useDefaultSize: true, automaticWidth: 1400, automaticHeight: 800 });
+  const tab = browser.tabs.get(1);
+  const window = browser.windows.get(7);
+  tab.url = "http://unmatched.example/document.json";
+  await browser.apply(tab);
+  assert.deepEqual({ width: window.width, height: window.height }, { width: 1400, height: 800 });
+  Object.assign(window, { width: 900, height: 600 });
+  tab.url = "https://matched.example/document.xml";
+  await browser.apply(tab);
+  assert.deepEqual({ width: window.width, height: window.height }, { width: 1010, height: 600 });
+});
+
+
 test("automatic Configuration dimensions apply to a new window before it receives a URL", async () => {
   const browser = await browserFixture();
   Object.assign(browser.local.smartWindowSizeConfig.global, { useDefaultSize: true, automaticWidth: 1377, automaticHeight: 877 });

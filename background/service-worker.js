@@ -1,5 +1,5 @@
 /**
- * SmartWindowSize | Version: 1.0.49 | Last updated: 2026-09-30 13:05:00 +02:00
+ * SmartWindowSize | Version: 1.0.50 | Last updated: 2026-09-30 15:00:00 +02:00
  *
  * Coordinates serialized window operations, validated configuration writes,
  * unique dialogs, and session diagnostics.
@@ -350,6 +350,17 @@ function windowKey(id) { return `windowState:${id}`; }
 function isSiteWindow(window) { return !window.type || window.type === "normal"; }
 
 
+/** Browser and extension UI protocols that must never trigger website sizing. @type {ReadonlySet<string>} */
+const INTERNAL_UI_PROTOCOLS = new Set(["about:", "brave:", "chrome:", "chrome-extension:", "devtools:", "edge:", "moz-extension:", "opera:", "vivaldi:"]);
+
+
+/** Determines whether a browser URL represents content eligible for SmartWindowSize sizing. @param {string|undefined} urlText Browser-reported tab URL. @returns {boolean} Whether rule and default resolution may process the URL. */
+function isSupportedSiteUrl(urlText) {
+  try { return !INTERNAL_UI_PROTOCOLS.has(new URL(urlText).protocol); }
+  catch { return false; }
+}
+
+
 /** Replaces the context menu after previous registrations finish. @param {object|undefined} tab Active tab used to set site-rule availability immediately. @returns {Promise<unknown>} Completion. */
 function refreshContextMenus(tab = undefined) {
   menuQueue = menuQueue.catch(() => undefined).then(() => createContextMenus(tab));
@@ -644,6 +655,7 @@ async function applyForTab(tab, useSavedPosition = false, traceSource = { eventN
     if (!tab.active) return;
     activeTabs.set(tab.windowId, tab);
     if (!isSiteWindow(window)) return;
+    if (!isSupportedSiteUrl(finalUrl)) return { skipped: "unsupported-url-scheme" };
     if (window.state !== "normal") {
       await writeSession(windowKey(window.id), { bounds: window, state: window.state });
       return;
@@ -659,7 +671,7 @@ async function applyForTab(tab, useSavedPosition = false, traceSource = { eventN
     const canApply = async () => {
       const currentTab = await chrome.tabs.get(tab.id);
       const currentConfig = await loadConfig();
-      return currentTab.active && currentTab.windowId === tab.windowId && currentTab.url === tab.url &&
+      return currentTab.active && currentTab.windowId === tab.windowId && currentTab.url === tab.url && isSupportedSiteUrl(currentTab.url) &&
         fingerprint(resolveRule(tab.url ?? "", currentConfig)) === fingerprint(resolved);
     };
     if (!await canApply()) return;
