@@ -3,6 +3,7 @@
  * This module is used by the service worker after resolving a rule for a tab.
  */
 import { APP_VERSION } from "../core/app-version.js";
+import { isMissingTabError } from "../core/tab-lifecycle.js";
 
 /**
  * Maps an active-state flag to every icon size declared by the manifest.
@@ -97,12 +98,12 @@ export async function updateActionIcon(tabId, resolved, hasDiagnostics = false) 
       await chrome.action.setIcon({ tabId, path: absoluteIconPaths(active, warning) });
     }
   } catch (error) {
-    failures.push({ operation: "Apply toolbar icon", error });
+    if (!isMissingTabError(error)) failures.push({ operation: "Apply toolbar icon", error });
   }
   try {
     await chrome.action.setTitle({ tabId, title: active ? `SmartWindowSize ${APP_VERSION}: enabled` : `SmartWindowSize ${APP_VERSION}: disabled` });
   } catch (error) {
-    if (!/No tab with id/i.test(error.message)) failures.push({ operation: "Set toolbar title", error });
+    if (!isMissingTabError(error)) failures.push({ operation: "Set toolbar title", error });
   }
   return failures;
 }

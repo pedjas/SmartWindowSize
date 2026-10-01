@@ -1,12 +1,12 @@
 {
   "manifest_version": 3,
   "name": "SmartWindowSize",
-  "version": "1.0.52",
+  "version": "1.0.53",
   "description": "Restores browser window sizes by domain, subdomain, path, or page.",
   "permissions": ["storage", "tabs", "windows", "contextMenus", "system.display"],
   "background": { "service_worker": "background/service-worker.js", "type": "module" },
   "action": {
-    "default_title": "SmartWindowSize 1.0.52: enabled",
+    "default_title": "SmartWindowSize 1.0.53: enabled",
     "default_popup": "popup/popup.html",
     "default_icon": {
       "16": "icons/active-16.png",

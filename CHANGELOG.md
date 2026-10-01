@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fixed
+
+- Treat tabs closed during asynchronous lifecycle work as expected stale
+  resources, preventing browser error-log spam while retaining unexpected
+  browser failures in Diagnostics.
+
 ## 1.0.52 - 2026-10-01
 
 ### Changed

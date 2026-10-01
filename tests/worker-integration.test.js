@@ -17,6 +17,7 @@ import * as actions from "../core/configuration-actions.js";
 import * as matcher from "../core/rule-matcher.js";
 import * as diagnostics from "../core/diagnostics.js";
 import * as session from "../core/runtime-session.js";
+import * as tabLifecycle from "../core/tab-lifecycle.js";
 import { windowBoundsChanged } from "../core/window-bounds.js";
 
 
@@ -54,6 +55,7 @@ async function browserFixture(rules = [], useFirefoxWindowEvents = false, firefo
   let optionsOpened = 0;
   let omitCreatedRuleDialogFromQuery = false;
   let createdPopupStartsBlank = false;
+  let tabGetFailure = null;
 
 
   /** Captures registered browser event callbacks. @param {string} name Event key. @returns {object} Event facade. */
@@ -84,7 +86,11 @@ async function browserFixture(rules = [], useFirefoxWindowEvents = false, firefo
     contextMenus: { removeAll: async () => {}, create: (_entry, callback) => callback(), onClicked: event("menu") },
     system: { display: { getInfo: async () => structuredClone(displays) } },
     tabs: {
-      async get(id) { if (!tabs.has(id)) throw new Error("Tab closed."); return structuredClone(tabs.get(id)); },
+      async get(id) {
+        if (tabGetFailure) throw tabGetFailure;
+        if (!tabs.has(id)) throw new Error("Tab closed.");
+        return structuredClone(tabs.get(id));
+      },
       async query(query) {
         const matched = [...tabs.values()].filter((tab) => (!query.active || tab.active) && (query.windowId === undefined || query.windowId === tab.windowId));
         if (omitCreatedRuleDialogFromQuery && query.windowId >= 100) return [];
@@ -144,7 +150,7 @@ async function browserFixture(rules = [], useFirefoxWindowEvents = false, firefo
     onRemoved: globalThis.chrome.windows.onRemoved,
     ...(firefoxHasBoundsChanged ? { onBoundsChanged: globalThis.chrome.windows.onBoundsChanged } : {})
   } : undefined;
-  const bindings = { ...storage, ...resolver, ...updater, ...manager, ...icons, ...menus, ...configModule, ...actions, ...matcher, ...diagnostics, ...session,
+  const bindings = { ...storage, ...resolver, ...updater, ...manager, ...icons, ...menus, ...configModule, ...actions, ...matcher, ...diagnostics, ...session, ...tabLifecycle,
     windowBoundsChanged, APP_VERSION: "test", chrome: globalThis.chrome, Date, URL, structuredClone,
     browser: firefoxWindowEvents ? { windows: firefoxWindowEvents } : undefined,
     setTimeout: (callback) => { const id = ++nextTimer; timers.set(id, callback); return id; }, clearTimeout: (id) => timers.delete(id) };
@@ -161,6 +167,7 @@ async function browserFixture(rules = [], useFirefoxWindowEvents = false, firefo
   return { local, ephemeral, windows, tabs, updates, iconUpdates, messages, listeners, created: () => created, optionsOpened: () => optionsOpened,
     omitCreatedRuleDialogFromQuery: (value) => { omitCreatedRuleDialogFromQuery = value; },
     createdPopupStartsBlank: (value) => { createdPopupStartsBlank = value; },
+    tabGetFailure: (error) => { tabGetFailure = error; },
     restart: async () => { context = vm.createContext({ ...bindings }); vm.runInContext(source, context); await settle(); },
     editor: async (tabId = 1) => {
       const dispatch = (...args) => vm.runInContext("dispatchRequest", context)(...args);
@@ -174,6 +181,42 @@ async function browserFixture(rules = [], useFirefoxWindowEvents = false, firefo
     runTimers: async () => { const callbacks = [...timers.values()]; timers.clear(); for (const callback of callbacks) callback(); await settle(); },
     request: (message) => new Promise((resolve) => listeners.message(message, {}, resolve)) };
 }
+
+
+test("a tab closed before rule application quietly stops the stale lifecycle operation", async () => {
+  const browser = await browserFixture([rule()]);
+  browser.tabs.delete(1);
+  const result = await browser.apply({ id: 1, windowId: 7, active: true, url: "https://alpha.example/news/item" });
+  assert.equal(result.skipped, "tab-closed");
+  assert.deepEqual((await browser.request({ type: "get-diagnostics" })).entries, []);
+});
+
+
+test("a closed Rules source tab releases editor ownership without diagnostic spam", async () => {
+  const browser = await browserFixture([rule()]);
+  const editor = await browser.editor();
+  browser.tabs.delete(1);
+  browser.listeners.tabRemoved(1);
+  await browser.settle();
+  const state = await editor.dispatch({ type: "get-rule-editor-state" });
+  assert.equal(state.sourceValid, false);
+  assert.equal(state.writable, false);
+  assert.equal(browser.ephemeral.ruleEditors.owner, null);
+  assert.equal(browser.ephemeral.ruleEditors.entries[editor.editorToken].sourceClosed, true);
+  assert.deepEqual((await browser.request({ type: "get-diagnostics" })).entries, []);
+});
+
+
+test("an unknown tab API failure propagates to the established diagnostic handler", async () => {
+  const browser = await browserFixture();
+  browser.tabGetFailure(new Error("Tab API permission denied."));
+  const result = await browser.request({ type: "get-state", tabId: 1 });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /permission denied/i);
+  const entries = (await browser.request({ type: "get-diagnostics" })).entries;
+  assert.equal(entries.length, 1);
+  assert.match(entries[0].message, /permission denied/i);
+});
 
 
 test("manual resize saves the resolved parent rule, actual size, position, and monitor", async () => {

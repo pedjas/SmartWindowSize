@@ -46,6 +46,8 @@ async function backgroundFixture() {
 
   const context = vm.createContext({
     APP_VERSION: "test", URL, setTimeout, clearTimeout, fingerprint, windowBoundsChanged,
+    getTabIfExists: async (id) => tabs.has(id) ? { ...tabs.get(id) } : null,
+    isMissingTabError: () => false,
     readSession: async (key) => structuredClone(session.get(key)),
     writeSession: async (key, value) => session.set(key, structuredClone(value)),
     removeSession: async (key) => session.delete(key),

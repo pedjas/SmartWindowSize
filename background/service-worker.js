@@ -1,5 +1,5 @@
 /**
- * SmartWindowSize | Version: 1.0.52 | Last updated: 2026-10-01 10:15:00 +02:00
+ * SmartWindowSize | Version: 1.0.53 | Last updated: 2026-10-01 10:45:00 +02:00
  *
  * Coordinates serialized window operations, validated configuration writes,
  * unique dialogs, and session diagnostics.
@@ -17,6 +17,7 @@ import { windowBoundsChanged } from "../core/window-bounds.js";
 import { scopeForUrl, toUrl } from "../core/rule-matcher.js";
 import { clearDiagnostics, loadDiagnostics, recordDiagnostic } from "../core/diagnostics.js";
 import { readSession, writeSession, removeSession } from "../core/runtime-session.js";
+import { getTabIfExists, isMissingTabError } from "../core/tab-lifecycle.js";
 
 /** Per-window operation chains prevent rule application and persistence races. @type {Map<number, Promise<unknown>>} */
 const windowQueues = new Map();
@@ -232,7 +233,7 @@ async function saveSiteRulesForEditor(registry, message) {
   let activeTab = (await chrome.tabs.query({ active: true, windowId: entry.sourceWindowId }))[0] ?? null;
   const diagnostic = saveRuleEditorDiagnosticContext(entry, activeTab, "source-tab-lookup");
   try {
-    const source = await chrome.tabs.get(entry.sourceId).catch(() => null);
+    const source = await getTabIfExists(entry.sourceId);
     if (!source) {
       diagnostic.validation = "source-tab-closed";
       throw new Error("The source tab was closed before saving its rules.");
@@ -249,7 +250,7 @@ async function saveSiteRulesForEditor(registry, message) {
     await requireEditorSource(source, entry.url);
     await inWindow(entry.sourceWindowId, async () => {
       await flushPendingBounds(entry.sourceWindowId);
-      const currentSource = await chrome.tabs.get(entry.sourceId).catch(() => null);
+      const currentSource = await getTabIfExists(entry.sourceId);
       if (!currentSource) {
         diagnostic.validation = "source-tab-closed-during-save";
         throw new Error("The source tab was closed before saving its rules.");
@@ -648,8 +649,13 @@ async function flushPendingBounds(id) {
 async function applyForTab(tab, useSavedPosition = false, traceSource = { eventName: "other", changeInfo: {} }) {
   if (!Number.isInteger(tab?.id) || tab.windowId === chrome.windows.WINDOW_ID_NONE) return;
   return inWindow(tab.windowId, async () => {
-    await flushPendingBounds(tab.windowId);
-    tab = await chrome.tabs.get(tab.id);
+    const candidateWindowId = tab.windowId;
+    await flushPendingBounds(candidateWindowId);
+    tab = await getTabIfExists(tab.id);
+    if (!tab) {
+      activeTabs.delete(candidateWindowId);
+      return { skipped: "tab-closed" };
+    }
     const window = await chrome.windows.get(tab.windowId);
     const finalUrl = tab.url ?? "";
     if (!tab.active) return;
@@ -669,7 +675,8 @@ async function applyForTab(tab, useSavedPosition = false, traceSource = { eventN
       return { skipped: "disabled" };
     }
     const canApply = async () => {
-      const currentTab = await chrome.tabs.get(tab.id);
+      const currentTab = await getTabIfExists(tab.id);
+      if (!currentTab) return false;
       const currentConfig = await loadConfig();
       return currentTab.active && currentTab.windowId === tab.windowId && currentTab.url === tab.url && isSupportedSiteUrl(currentTab.url) &&
         fingerprint(resolveRule(tab.url ?? "", currentConfig)) === fingerprint(resolved);
@@ -785,7 +792,7 @@ async function openUniqueDialog(key, url, width, height, sourceWindowId = undefi
 /** Finds a rule dialog by recorded popup IDs first, then by token after a background restart. @param {object} entry Session-backed editor entry. @returns {Promise<{window: object, tab: object}|null>} Matching live dialog or null. */
 async function locateRuleEditor(entry) {
   if (Number.isInteger(entry.dialogId) && Number.isInteger(entry.windowId)) {
-    const tab = await chrome.tabs.get(entry.dialogId).catch(() => null);
+    const tab = await getTabIfExists(entry.dialogId);
     if (tab?.windowId === entry.windowId) {
       const window = await chrome.windows.get(entry.windowId).catch(() => null);
       if (window) return { window, tab };
@@ -805,7 +812,12 @@ async function locateRuleEditor(entry) {
 async function focusRecordedRuleEditor(entry) {
   const dialog = await locateRuleEditor(entry);
   if (!dialog) return false;
-  await chrome.tabs.update(dialog.tab.id, { active: true });
+  try {
+    await chrome.tabs.update(dialog.tab.id, { active: true });
+  } catch (error) {
+    if (isMissingTabError(error)) return false;
+    throw error;
+  }
   await chrome.windows.update(dialog.window.id, { focused: true });
   Object.assign(entry, { windowId: dialog.window.id, dialogId: dialog.tab.id });
   return true;
@@ -826,7 +838,13 @@ async function openLocalReadme() {
   const url = chrome.runtime.getURL("readme-viewer/readme.html");
   const existing = (await chrome.tabs.query({})).find((tab) => tab.url === url || tab.pendingUrl === url);
   if (existing) {
-    await chrome.tabs.update(existing.id, { active: true });
+    try {
+      await chrome.tabs.update(existing.id, { active: true });
+    } catch (error) {
+      if (!isMissingTabError(error)) throw error;
+      await chrome.tabs.create({ url, active: true });
+      return;
+    }
     await chrome.windows.update(existing.windowId, { focused: true });
     return;
   }
@@ -836,8 +854,8 @@ async function openLocalReadme() {
 
 /** Resolves a source tab and rejects an action whose captured URL or window changed before the background received it. @param {object} message Action request. @param {object} sender Browser sender. @returns {Promise<object|undefined>} Source tab. */
 async function sourceTab(message, sender) {
-  const tab = Number.isInteger(message.tabId) ? await chrome.tabs.get(message.tabId)
-    : sender.tab ? await chrome.tabs.get(sender.tab.id)
+  const tab = Number.isInteger(message.tabId) ? await getTabIfExists(message.tabId)
+    : sender.tab ? await getTabIfExists(sender.tab.id)
       : (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0];
   if (message.sourceUrl !== undefined && tab?.url !== message.sourceUrl) throw new Error("The source page changed before the action could start.");
   if (message.sourceWindowId !== undefined && tab?.windowId !== message.sourceWindowId) throw new Error("The source window changed before the action could start.");
@@ -884,9 +902,18 @@ async function dispatchAction(message, sender, registry) {
       entry.lifecycle.handshakeAt = new Date().toISOString();
       clearRuleEditorOpeningTimeout(entry.token);
     }
-    const source = await chrome.tabs.get(entry.sourceId).catch(() => null);
+    const source = await getTabIfExists(entry.sourceId);
     const config = await loadConfig();
     const sourceValid = source?.windowId === entry.sourceWindowId && source?.url === entry.url;
+    if (!source) {
+      if (!entry.sourceClosed) {
+        entry.sourceClosed = true;
+        entry.lifecycle ??= {};
+        entry.lifecycle.transition = "source missing during editor request";
+        entry.lifecycle.sourceClosedAt = new Date().toISOString();
+      }
+      if (registry.owner === entryId) registry.owner = null;
+    }
     if (message.type === "enable-rule-editing") {
       if (!sourceValid || !config.global.enabled) throw new Error("The source page changed or the extension is disabled. Editing is unavailable.");
       if (registry.owner !== null && registry.owner !== entryId) throw new Error("Rules are being edited in another window.");
@@ -1110,7 +1137,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
   refreshContextMenus().then(scheduleIconRefresh).catch((error) => reportDiagnostic("Synchronize configuration", error));
 });
 chrome.tabs.onActivated.addListener(({ tabId }) => {
-  chrome.tabs.get(tabId).then(async (tab) => {
+  getTabIfExists(tabId).then(async (tab) => {
+    if (!tab) return;
     activeTabs.set(tab.windowId, tab);
     await refreshContextMenus(tab);
     return applyForTab(tab, false, { eventName: "tabs.onActivated", changeInfo: {} });
