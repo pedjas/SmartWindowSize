@@ -20,7 +20,7 @@ test("Chrome and Firefox manifests expose the shared Options page without broad 
   assert.equal(chrome.options_page, "options/options.html");
   assert.deepEqual(firefox.options_ui, { page: "options/options.html", open_in_tab: true });
   assert.equal(firefox.options_page, undefined);
-  assert.equal(firefox.browser_specific_settings.gecko.strict_min_version, "115.0");
+  assert.equal(firefox.browser_specific_settings.gecko.strict_min_version, "140.0");
   assert.equal(chrome.host_permissions, undefined);
   assert.equal(firefox.host_permissions, undefined);
   assert.equal(chrome.permissions.includes("activeTab"), false);

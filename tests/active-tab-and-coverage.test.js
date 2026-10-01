@@ -45,7 +45,7 @@ async function backgroundFixture() {
   function event(name) { return { addListener(callback) { listeners[name] = callback; } }; }
 
   const context = vm.createContext({
-    APP_VERSION: "test", setTimeout, clearTimeout, fingerprint, windowBoundsChanged,
+    APP_VERSION: "test", URL, setTimeout, clearTimeout, fingerprint, windowBoundsChanged,
     readSession: async (key) => structuredClone(session.get(key)),
     writeSession: async (key, value) => session.set(key, structuredClone(value)),
     removeSession: async (key) => session.delete(key),

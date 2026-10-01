@@ -1,5 +1,5 @@
 /**
- * SmartWindowSize | Version: 1.0.50 | Last updated: 2026-09-30 15:00:00 +02:00
+ * SmartWindowSize | Version: 1.0.52 | Last updated: 2026-10-01 10:15:00 +02:00
  *
  * Coordinates serialized window operations, validated configuration writes,
  * unique dialogs, and session diagnostics.
