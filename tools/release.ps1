@@ -3,9 +3,9 @@
 Creates a guarded SmartWindowSize GitHub Draft Release from the current manifest version.
 
 .DESCRIPTION
-Validates the repository before changing CHANGELOG.md, uses the established
-package-extension.ps1 build, creates one release commit and tag, pushes them,
-then uploads the two ZIP packages to a GitHub Draft Release.
+Validates the already committed release state, builds packages, tags that
+state, creates a GitHub Draft Release, and only then moves the # Released
+boundary locally without committing the changelog transition.
 
 .PARAMETER ReleaseBranch
 The only local branch permitted to create a release. It must be synchronized
@@ -15,19 +15,13 @@ with its matching origin branch before this script changes any local file.
 Builds and validates temporary browser packages without modifying CHANGELOG.md,
 Git history, the project install/ directory, a remote, or GitHub.
 
-.PARAMETER SimulateFailureAfterChangelog
-Tests pre-commit cleanup by stopping immediately after CHANGELOG.md is locally
-finalized. This test-only switch never creates a release commit, tag, push, or
-GitHub Release.
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [string]$ReleaseBranch = 'master',
 
-    [switch]$DryRun,
-
-    [switch]$SimulateFailureAfterChangelog
+    [switch]$DryRun
 )
 
 <# Strict mode prevents incomplete preflight results from being treated as valid release state. #>
@@ -35,6 +29,8 @@ Set-StrictMode -Version Latest
 
 <# Native-command failures must stop the release before later external steps can run. #>
 $ErrorActionPreference = 'Stop'
+
+Import-Module (Join-Path $PSScriptRoot 'release-changelog.psm1') -Force
 
 
 <# The GitHub repository that receives every SmartWindowSize Draft Release. #>
@@ -52,17 +48,8 @@ $ReleaseNotesPath = $null
 <# The temporary package root used only by a dry run and removed when it completes. #>
 $DryRunInstallRoot = $null
 
-<# The successful release preflight, retained for pre-commit cleanup after a failure. #>
+<# The successful release preflight retained through release publication. #>
 $preflight = $null
-
-<# The original changelog captured before local finalization, available for a safe pre-commit restore. #>
-$OriginalChangelogContent = $null
-
-<# Whether this invocation rewrote CHANGELOG.md before creating a release commit. #>
-$ChangelogFinalized = $false
-
-<# Whether the release commit exists and therefore prohibits automatic local rollback. #>
-$ReleaseCommitCreated = $false
 
 
 <#
@@ -286,132 +273,6 @@ function Get-ManifestVersion {
 
 <#
 .SYNOPSIS
-Returns the non-empty Unreleased release notes from the cumulative changelog.
-
-.PARAMETER ChangelogPath
-The cumulative root CHANGELOG.md to validate and later finalize.
-
-.OUTPUTS
-PSCustomObject. Original content, the Unreleased match, and its release notes.
-#>
-function Get-UnreleasedChangelog {
-    param(
-        [Parameter(Mandatory)]
-        [string]$ChangelogPath
-    )
-
-    if (-not (Test-Path -LiteralPath $ChangelogPath -PathType Leaf)) {
-        throw "Required changelog is missing: $ChangelogPath"
-    }
-
-    # Preserve the current text so finalization can leave prior release sections untouched.
-    $content = Get-Content -LiteralPath $ChangelogPath -Raw
-    $options = [System.Text.RegularExpressions.RegexOptions]::Multiline -bor [System.Text.RegularExpressions.RegexOptions]::Singleline
-    $match = [regex]::Match($content, '\A# Changelog\r?\n\r?\n## Unreleased\r?\n(?<notes>.*?)(?=^##\s|\z)', $options)
-    if (-not $match.Success) {
-        throw 'CHANGELOG.md must begin with # Changelog followed immediately by ## Unreleased.'
-    }
-
-    # A heading alone is not releasable; at least one user-visible change must be recorded.
-    $notes = $match.Groups['notes'].Value.Trim()
-    if ([string]::IsNullOrWhiteSpace($notes) -or $notes -notmatch '(?m)^\s*-\s+\S') {
-        throw 'CHANGELOG.md ## Unreleased must contain at least one release-note bullet before releasing.'
-    }
-
-    return [pscustomobject]@{
-        Content = $content
-        Match = $match
-        Notes = $notes
-    }
-}
-
-
-<#
-.SYNOPSIS
-Moves the current Unreleased notes into a dated, immutable release section.
-
-.PARAMETER ChangelogPath
-The root CHANGELOG.md whose Unreleased section will be finalized.
-
-.PARAMETER Unreleased
-The validated Unreleased content returned by Get-UnreleasedChangelog.
-
-.PARAMETER Version
-The already-established manifest version for the new history heading.
-
-.PARAMETER ReleaseDate
-The local release date formatted as YYYY-MM-DD.
-
-.OUTPUTS
-None. Rewrites only CHANGELOG.md with a new empty Unreleased section.
-#>
-function Write-FinalizedChangelog {
-    param(
-        [Parameter(Mandatory)]
-        [string]$ChangelogPath,
-
-        [Parameter(Mandatory)]
-        [pscustomobject]$Unreleased,
-
-        [Parameter(Mandatory)]
-        [string]$Version,
-
-        [Parameter(Mandatory)]
-        [string]$ReleaseDate
-    )
-
-    # Copy the historical portion verbatim after inserting the new immutable release section.
-    $notesEnd = $Unreleased.Match.Groups['notes'].Index + $Unreleased.Match.Groups['notes'].Length
-    $history = $Unreleased.Content.Substring($notesEnd).TrimStart([char[]]"`r`n")
-    $normalizedNotes = ($Unreleased.Notes -replace "`r?`n", "`r`n").Trim()
-    $updated = "# Changelog`r`n`r`n## Unreleased`r`n`r`n## $Version - $ReleaseDate`r`n`r`n$normalizedNotes"
-
-    if (-not [string]::IsNullOrWhiteSpace($history)) {
-        $updated += "`r`n`r`n$history"
-    }
-
-    $updated += "`r`n"
-    [System.IO.File]::WriteAllText($ChangelogPath, $updated, [System.Text.UTF8Encoding]::new($false))
-}
-
-
-<#
-.SYNOPSIS
-Restores the exact pre-release changelog and clears its release staging entry.
-
-.DESCRIPTION
-Runs only before a release commit exists. Preflight requires a clean tree, so
-restoring this one file cannot discard unrelated user work.
-
-.PARAMETER GitPath
-Resolved Git executable used with this repository.
-
-.PARAMETER ChangelogPath
-Root changelog path that was locally finalized.
-
-.PARAMETER OriginalContent
-Complete changelog text captured before finalization.
-#>
-function Restore-UncommittedChangelog {
-    param(
-        [Parameter(Mandatory)]
-        [string]$GitPath,
-
-        [Parameter(Mandatory)]
-        [string]$ChangelogPath,
-
-        [Parameter(Mandatory)]
-        [string]$OriginalContent
-    )
-
-    # Restore the captured bytes before changing the index, so a failed Git call still leaves readable source text.
-    [System.IO.File]::WriteAllText($ChangelogPath, $OriginalContent, [System.Text.UTF8Encoding]::new($false))
-    Invoke-RepositoryGitCommand -GitPath $GitPath -Arguments @('restore', '--staged', '--', 'CHANGELOG.md') -Description 'Unstaging restored changelog' | Out-Null
-}
-
-
-<#
-.SYNOPSIS
 Checks whether a local or remote tag already exists without changing Git history.
 
 .PARAMETER GitPath
@@ -510,7 +371,7 @@ function Invoke-ReleasePreflight {
         throw "Release script must run from its own repository root. Found: $gitRoot"
     }
 
-    # A clean tree guarantees the later release commit contains only the finalized changelog.
+    # A clean synchronized tree guarantees the tag identifies the already committed product state.
     $workingTree = Invoke-RepositoryGitCommand -GitPath $gitPath -Arguments @('status', '--porcelain=v1', '--untracked-files=all') -Description 'Checking Git working tree'
     if (-not [string]::IsNullOrWhiteSpace($workingTree)) {
         throw "Git working tree is not clean. Commit, stash, or otherwise resolve changes before releasing.`n$workingTree"
@@ -541,8 +402,8 @@ function Invoke-ReleasePreflight {
         throw "Firefox manifest version '$($template.version)' does not match root manifest version '$version'."
     }
 
-    $unreleased = Get-UnreleasedChangelog -ChangelogPath $changelogPath
     $tag = "v$version"
+    $unreleasedMilestones = Get-UnreleasedMilestoneSections -ChangelogPath $changelogPath -Version $version
     Test-TagAvailable -GitPath $gitPath -Tag $tag
     Test-GitHubReleaseAvailable -GhPath $ghPath -Tag $tag
 
@@ -554,7 +415,7 @@ function Invoke-ReleasePreflight {
         BuildScriptPath = $buildScriptPath
         Version = $version
         Tag = $tag
-        Unreleased = $unreleased
+        UnreleasedMilestones = $unreleasedMilestones
     }
 }
 
@@ -601,6 +462,12 @@ function Invoke-DryRunPreflight {
     if ($originUrl -notmatch 'github\.com[/:]pedjas/SmartWindowSize(?:\.git)?$') {
         $warnings.Add("Real release requires origin github.com/pedjas/SmartWindowSize, but origin is '$originUrl'.")
     }
+    else {
+        $syncCounts = Invoke-RepositoryGitCommand -GitPath $gitPath -Arguments @('rev-list', '--left-right', '--count', "$ReleaseBranch...origin/$ReleaseBranch") -Description 'Checking cached branch synchronization'
+        if ($syncCounts -notmatch '^0\s+0$') {
+            $warnings.Add("Real release requires '$ReleaseBranch' to be synchronized with origin/$ReleaseBranch (ahead behind: $syncCounts).")
+        }
+    }
 
     $version = Get-ManifestVersion -ManifestPath $manifestPath
     $template = Get-Content -LiteralPath $firefoxTemplatePath -Raw | ConvertFrom-Json
@@ -608,10 +475,10 @@ function Invoke-DryRunPreflight {
         throw "Firefox manifest version '$($template.version)' does not match root manifest version '$version'."
     }
 
-    $unreleased = Get-UnreleasedChangelog -ChangelogPath $changelogPath
     $tag = "v$version"
+    $unreleasedMilestones = Get-UnreleasedMilestoneSections -ChangelogPath $changelogPath -Version $version
 
-    # A dry run never fetches or alters remote-tracking references, so remote tag state is only reported as pending.
+    # A dry run never fetches or alters remote-tracking references, but it can read the remote tag state directly.
     $safeDirectory = $ProjectRoot -replace '\\', '/'
     $localTagResult = Get-NativeCommandResult -Executable $gitPath -Arguments @('-c', "safe.directory=$safeDirectory", '-C', $ProjectRoot, 'show-ref', '--tags', '--verify', '--quiet', "refs/tags/$tag") -Description "Checking local Git tag '$tag'"
     if ($localTagResult.ExitCode -eq 0) {
@@ -619,6 +486,13 @@ function Invoke-DryRunPreflight {
     }
     elseif ($localTagResult.ExitCode -ne 1) {
         $warnings.Add("Local tag '$tag' could not be verified: $($localTagResult.StandardError)")
+    }
+    $remoteTagResult = Get-NativeCommandResult -Executable $gitPath -Arguments @('-c', "safe.directory=$safeDirectory", '-C', $ProjectRoot, 'ls-remote', '--tags', 'origin', "refs/tags/$tag") -Description "Checking remote Git tag '$tag'"
+    if ($remoteTagResult.ExitCode -ne 0) {
+        $warnings.Add("Remote tag '$tag' could not be verified: $($remoteTagResult.StandardError)")
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($remoteTagResult.StandardOutput)) {
+        $warnings.Add("Real release is blocked because remote tag '$tag' already exists.")
     }
 
     $ghCommand = Get-Command -Name 'gh' -ErrorAction SilentlyContinue
@@ -628,9 +502,10 @@ function Invoke-DryRunPreflight {
     }
     else {
         $ghPath = $ghCommand.Source
-        $authOutput = @(& $ghPath auth status --hostname github.com 2>&1)
-        if ($LASTEXITCODE -ne 0) {
-            $warnings.Add("GitHub CLI is not authenticated for github.com:`n$(($authOutput | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine)")
+        $authResult = Get-NativeCommandResult -Executable $ghPath -Arguments @('auth', 'status', '--hostname', 'github.com') -Description 'Checking GitHub CLI authentication for dry run'
+        if ($authResult.ExitCode -ne 0) {
+            $authDetails = @($authResult.StandardOutput, $authResult.StandardError) -join [Environment]::NewLine
+            $warnings.Add("GitHub CLI is not authenticated for github.com:`n$authDetails")
         }
         else {
             $releaseResult = Get-GitHubReleaseViewResult -GhPath $ghPath -Tag $tag
@@ -649,7 +524,7 @@ function Invoke-DryRunPreflight {
         BuildScriptPath = $buildScriptPath
         Version = $version
         Tag = $tag
-        Unreleased = $unreleased
+        UnreleasedMilestones = $unreleasedMilestones
         Warnings = $warnings
     }
 }
@@ -742,9 +617,6 @@ try {
     if ($DryRun -and $WhatIfPreference) {
         throw 'Use either -DryRun or -WhatIf, not both.'
     }
-    if ($SimulateFailureAfterChangelog -and ($DryRun -or $WhatIfPreference)) {
-        throw 'SimulateFailureAfterChangelog requires a real-release preflight and cannot be combined with DryRun or WhatIf.'
-    }
 
     if ($DryRun) {
         $dryRunResult = Invoke-DryRunPreflight
@@ -761,7 +633,7 @@ try {
         Write-Host "Chrome test package: $($packagePaths[0])"
         Write-Host "Firefox test package: $($packagePaths[1])"
         Write-Host 'No changelog, Git history, remote, or GitHub Release changes were made.'
-        Write-Host 'A real release would finalize CHANGELOG.md, commit it, create and push the tag, then create a Draft Release.'
+        Write-Host 'A real release would tag the synchronized product commit, create a grouped Draft Release, then move # Released locally without committing it.'
 
         if ($dryRunResult.Warnings.Count -gt 0) {
             Write-Host 'Real-release blockers or unchecked external prerequisites:'
@@ -781,54 +653,32 @@ try {
         exit 0
     }
 
-    # This is the first local mutation, reached only after every safety check above succeeds.
-    $releaseDate = Get-Date -Format 'yyyy-MM-dd'
-    $OriginalChangelogContent = $preflight.Unreleased.Content
-    Write-FinalizedChangelog -ChangelogPath $preflight.ChangelogPath -Unreleased $preflight.Unreleased -Version $preflight.Version -ReleaseDate $releaseDate
-    $ChangelogFinalized = $true
-    $CompletedSteps.Add('CHANGELOG.md finalized locally (not committed)')
-
-    if ($SimulateFailureAfterChangelog) {
-        throw 'Simulated failure after CHANGELOG.md finalization. The original changelog should now be restored.'
-    }
-
     & $preflight.BuildScriptPath -Target all
 
     $packagePaths = Confirm-ReleasePackages -Version $preflight.Version
     $CompletedSteps.Add('Chrome and Firefox packages created and verified')
 
-    # Stage an explicit allowlist so release output and unrelated files cannot enter the commit.
-    Invoke-RepositoryGitCommand -GitPath $preflight.GitPath -Arguments @('add', '--', 'CHANGELOG.md') -Description 'Staging finalized changelog' | Out-Null
-    $CompletedSteps.Add('Finalized CHANGELOG.md staged locally')
-    $stagedPaths = Invoke-RepositoryGitCommand -GitPath $preflight.GitPath -Arguments @('diff', '--cached', '--name-only') -Description 'Checking staged release files'
-    if ($stagedPaths.Trim() -ne 'CHANGELOG.md') {
-        throw "Release commit may stage only CHANGELOG.md, but staged files are:`n$stagedPaths"
-    }
-
-    Invoke-RepositoryGitCommand -GitPath $preflight.GitPath -Arguments @('var', 'GIT_AUTHOR_IDENT') -Description 'Checking Git commit identity' | Out-Null
-    Invoke-RepositoryGitCommand -GitPath $preflight.GitPath -Arguments @('commit', '-m', "Release $($preflight.Tag)") -Description 'Creating release commit' | Out-Null
-    $ReleaseCommitCreated = $true
-    $CompletedSteps.Add('Release commit created')
-
+    # The tag must identify the already committed and synchronized product state, not a changelog-only commit.
     Invoke-RepositoryGitCommand -GitPath $preflight.GitPath -Arguments @('tag', '-a', $preflight.Tag, '-m', "Release $($preflight.Tag)") -Description 'Creating release tag' | Out-Null
     $releaseCommit = Invoke-RepositoryGitCommand -GitPath $preflight.GitPath -Arguments @('rev-parse', 'HEAD') -Description 'Reading release commit'
     $tagCommit = Invoke-RepositoryGitCommand -GitPath $preflight.GitPath -Arguments @('rev-parse', "$($preflight.Tag)^{commit}") -Description 'Verifying release tag target'
     if ($tagCommit -ne $releaseCommit) {
-        throw "Tag $($preflight.Tag) does not point to the release commit."
+        throw "Tag $($preflight.Tag) does not point to the synchronized product commit."
     }
-    $CompletedSteps.Add("Tag $($preflight.Tag) created and verified against the release commit")
-
-    Invoke-RepositoryGitCommand -GitPath $preflight.GitPath -Arguments @('push', 'origin', $ReleaseBranch) -Description 'Pushing release commit' | Out-Null
-    $CompletedSteps.Add('Release commit pushed')
+    $CompletedSteps.Add("Tag $($preflight.Tag) created and verified against the synchronized product commit")
 
     Invoke-RepositoryGitCommand -GitPath $preflight.GitPath -Arguments @('push', 'origin', $preflight.Tag) -Description 'Pushing release tag' | Out-Null
     $CompletedSteps.Add("Tag $($preflight.Tag) pushed")
 
-    # Pass the extracted Unreleased content as a file to preserve Markdown formatting in GitHub.
+    # Pass captured milestone blocks to GitHub before moving the release boundary.
     $ReleaseNotesPath = Join-Path ([System.IO.Path]::GetTempPath()) "SmartWindowSize-release-notes-$([guid]::NewGuid().ToString('N')).md"
-    [System.IO.File]::WriteAllText($ReleaseNotesPath, $preflight.Unreleased.Notes, [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText($ReleaseNotesPath, $preflight.UnreleasedMilestones.UnreleasedText, [System.Text.UTF8Encoding]::new($false))
     $releaseUrl = Invoke-NativeCommand -Executable $preflight.GhPath -Arguments @('release', 'create', $preflight.Tag, $packagePaths[0], $packagePaths[1], '--repo', $ExpectedRepository, '--title', "Smart Window Size $($preflight.Tag)", '--draft', '--notes-file', $ReleaseNotesPath) -Description 'Creating GitHub Draft Release'
     $CompletedSteps.Add('GitHub Draft Release created with Chrome and Firefox ZIP assets')
+
+    # Publication succeeded; only now move the captured milestone boundary and leave it uncommitted.
+    Move-ReleasedMarker -ChangelogPath $preflight.ChangelogPath -UnreleasedMilestones $preflight.UnreleasedMilestones
+    $CompletedSteps.Add('# Released moved locally after successful release (intentionally uncommitted)')
 
     Write-Host ''
     Write-Host 'RELEASE DRAFT CREATED'
@@ -838,19 +688,11 @@ try {
     Write-Host "Firefox: $($packagePaths[1])"
     Write-Host "GitHub: $releaseUrl"
     Write-Host 'Review and publish the Draft Release manually on GitHub.'
+    Write-Host '# Released was moved locally to mark the captured milestones as released.'
+    Write-Host 'This CHANGELOG.md change is intentionally left uncommitted and may be included in the next normal development commit.'
 }
 catch {
     $releaseFailure = $_
-    $restoreMessage = $null
-    if ($ChangelogFinalized -and -not $ReleaseCommitCreated -and $null -ne $preflight -and $null -ne $OriginalChangelogContent) {
-        try {
-            Restore-UncommittedChangelog -GitPath $preflight.GitPath -ChangelogPath $preflight.ChangelogPath -OriginalContent $OriginalChangelogContent
-            $restoreMessage = 'CHANGELOG.md was restored to its pre-release content and removed from staging.'
-        }
-        catch {
-            $restoreMessage = "WARNING: CHANGELOG.md could not be restored automatically: $($_.Exception.Message)"
-        }
-    }
     Write-Host ''
     Write-Host 'RELEASE STOPPED'
     if ($CompletedSteps.Count -gt 0) {
@@ -858,10 +700,10 @@ catch {
         $CompletedSteps | ForEach-Object { Write-Host "- $_" }
     }
     else {
-        Write-Host 'No release commit, tag, push, or GitHub Release was created.'
+        Write-Host 'No tag, push, or GitHub Release was created.'
     }
 
-    if ($null -ne $restoreMessage) { Write-Host $restoreMessage }
+    Write-Host 'CHANGELOG.md release state was not changed; unreleased committed milestones remain above # Released unless a successful GitHub Draft Release was already reported.'
     Write-Host "$($releaseFailure.Exception.Message)`n$($releaseFailure.ScriptStackTrace)"
     exit 1
 }

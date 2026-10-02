@@ -1,6 +1,4 @@
-# Changelog
-
-## Unreleased
+# CHANGELOG
 
 ## 1.1.0 - 2026-10-02
 
@@ -47,6 +45,8 @@
 - Treat tabs closed during asynchronous lifecycle work as expected stale
   resources, preventing browser error-log spam while retaining unexpected
   browser failures in Diagnostics.
+
+# Released
 
 ## 1.0.52 - 2026-10-01
 
