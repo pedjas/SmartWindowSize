@@ -33,7 +33,7 @@ function Get-ChangelogState {
     $firstSectionIndex = if ($sectionMatches.Count -gt 0) { $sectionMatches[0].Index } else { $aboveMarker.Length }
     $pendingNotes = $aboveMarker.Substring(0, $firstSectionIndex).Trim()
     if (-not [string]::IsNullOrWhiteSpace($pendingNotes)) {
-        $remaining = [regex]::Replace($pendingNotes, '(?m)^-\s+\S.*$', '')
+        $remaining = [regex]::Replace($pendingNotes, '(?m)^-\s+\S.*(?:\r?\n[ \t]+\S.*)*', '')
         if ($remaining -match '\S') { throw 'Only unheaded bullet entries may appear before the first committed version milestone.' }
     }
 

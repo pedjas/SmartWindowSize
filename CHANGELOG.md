@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## 1.1.3 - 2026-10-02
+
+- Clarify version-increment exception handling and allow wrapped pending
+  CHANGELOG bullets to close correctly into a commit milestone.
+
 ## 1.1.0 - 2026-10-02
 
 ### Added
@@ -129,7 +134,7 @@
   sizing; manual input selects Custom instead of retaining a stale preset.
 - Map **Automatically set window size if no rules** to the global default-size
   behavior, so custom Width and Height values are applied instead of the
-  previous 1200 Ă„â€šĂ˘â‚¬â€ť 960 default.
+  previous 1200 Ä‚â€žĂ˘â‚¬ĹˇÄ‚ËĂ˘â€šÂ¬Ă˘â‚¬ĹĄ 960 default.
 - Enable Configuration `Width` and `Height` whenever automatic no-rule window
   sizing is enabled, including when a preset is selected.
 - Treat a stale **Set rules for this site** dialog as an expected visible state
@@ -193,7 +198,3 @@
 
 - Initial version of Manifest V3 SmartWindowSize extension for desktop Chromium browsers, with a
   separate Firefox manifest package.
-
-
-
-
