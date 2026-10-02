@@ -9,6 +9,8 @@ import vm from "node:vm";
 import { createDefaultConfig, normalizeConfig } from "../core/config.js";
 import { matchingRulesForUrl, resolveRule } from "../core/rule-resolver.js";
 import { SCOPE_PRIORITY, scopeForUrl } from "../core/rule-matcher.js";
+import { canonicalMatchKey, canonicalMatchKeyForUrl } from "../core/rule-sync.js";
+import { RULE_TYPE_LABELS, RULE_TYPE_DESCRIPTORS } from "../core/rule-types.js";
 import { fingerprint } from "../core/configuration-actions.js";
 import { windowBoundsChanged } from "../core/window-bounds.js";
 
@@ -73,7 +75,7 @@ async function backgroundFixture() {
   });
   vm.runInContext(await scriptBody("background/service-worker.js"), context);
   await new Promise((resolve) => setImmediate(resolve));
-  return { tabs, applied, listeners, controls, apply: vm.runInContext("applyForTab", context) };
+  return { tabs, config, applied, listeners, controls, apply: vm.runInContext("applyForTab", context) };
 }
 
 
@@ -100,11 +102,12 @@ test("switching tabs applies the newly active tab and does not require window fo
 });
 
 
-test("existing tabs do not restore a saved position, while a new browser window may do so", async () => {
+test("matching rules restore a remembered position for existing and new browser windows", async () => {
   const fixture = await backgroundFixture();
+  fixture.config.rules[0].position = { enabled: true, x: 120, y: 80 };
   await fixture.apply(fixture.tabs.get(1));
   await fixture.apply(fixture.tabs.get(3), true);
-  assert.equal(fixture.applied[0].useSavedPosition, false);
+  assert.equal(fixture.applied[0].useSavedPosition, true);
   assert.equal(fixture.applied[1].useSavedPosition, true);
 });
 
@@ -129,18 +132,19 @@ function element() {
 /** Loads the real rule-editor script with a staged saved rule and no persistent writes. @param {object} access Mutable server state overrides. @returns {Promise<object>} Controls, requests and an edit entry point. */
 async function ruleEditorFixture(access = {}) {
   const controls = new Map();
-  for (const id of ["rules", "empty", "add", "editor", "selected-scope", "remember-position", "remember-monitor", "editor-title", "confirm-rule", "cancel-edit", "save", "cancel", "bring-to-front", "reload", "error", "source-url", "access-status", "focus-editor", "enable-editing"]) controls.set(id, element());
+  for (const id of ["rules", "empty", "add", "editor", "selected-scope", "remember-position", "remember-monitor", "rule-enabled", "effective-scope", "editor-sync-status", "editor-title", "confirm-rule", "cancel-edit", "save", "cancel", "bring-to-front", "reload", "error", "source-url", "access-status", "focus-editor", "enable-editing"]) controls.set(id, element());
   controls.get("editor").hidden = true;
-  const rule = fixtureRule();
+  const rule = access.rule ?? fixtureRule();
+  const sourceUrl = access.url ?? "https://first.example/";
   const requests = [];
   let onMessage;
   let confirmations = 0;
   const context = vm.createContext({
-    APP_VERSION: "test", SCOPE_PRIORITY, scopeForUrl, matchingRulesForUrl, resolveRule, URL, structuredClone, crypto: { randomUUID: () => "test-id" },
+    APP_VERSION: "test", SCOPE_PRIORITY, RULE_TYPE_LABELS, scopeForUrl, canonicalMatchKey, canonicalMatchKeyForUrl, matchingRulesForUrl, resolveRule, URL, structuredClone, crypto: { randomUUID: () => "test-id" },
     installClientErrors: () => {}, runClientAction: async (_operation, action) => action(),
     request: async (message) => {
       requests.push(message);
-      if (message.type === "get-rule-editor-state") return { url: "https://first.example/", rules: [structuredClone(rule)], ownsEditor: true, writable: true, hasOwner: true, sourceValid: true, enabled: true, ...access };
+      if (message.type === "get-rule-editor-state") return { url: sourceUrl, rules: [structuredClone(rule)], ownsEditor: true, writable: true, hasOwner: true, sourceValid: true, enabled: true, ...access };
       if (message.type === "prepare-site-rule") return { rule: { ...rule, id: message.existing?.id ?? "new-rule", scope: { type: message.scope, value: scopeForUrl(message.url, message.scope) } } };
       return { ok: true };
     },
@@ -149,7 +153,7 @@ async function ruleEditorFixture(access = {}) {
     chrome: { runtime: { onMessage: { addListener(listener) { onMessage = listener; } }, sendMessage: async (message) => {
       requests.push(message);
       return message.type === "get-rule-editor-state"
-        ? { url: "https://first.example/", rules: [structuredClone(rule)], window: { width: 800, height: 600, left: 40, top: 80 } }
+        ? { url: sourceUrl, rules: [structuredClone(rule)], window: { width: 800, height: 600, left: 40, top: 80 } }
         : { ok: true };
     } } }
   });
@@ -159,17 +163,16 @@ async function ruleEditorFixture(access = {}) {
 }
 
 
-test("Add rule requires explicit coverage and blocks empty submission and save", async () => {
+test("Add rule starts with a usable domain-tree scope", async () => {
   const fixture = await ruleEditorFixture();
   const controls = fixture.controls;
   controls.get("add").listeners.click();
-  assert.equal(controls.get("selected-scope").value, "");
-  assert.equal(controls.get("confirm-rule").disabled, true);
+  assert.equal(controls.get("selected-scope").value, "domain_tree");
+  assert.equal(controls.get("confirm-rule").disabled, false);
   assert.equal(controls.get("save").disabled, true);
   await controls.get("editor").listeners.submit({ preventDefault() {} });
   await controls.get("save").listeners.click();
-  assert.equal(fixture.state().rules.length, 1);
-  assert.equal(fixture.requests.length, 1);
+  assert.equal(fixture.state().rules.length, 2);
   controls.get("selected-scope").value = "url_any_parameters";
   controls.get("selected-scope").listeners.change();
   assert.equal(controls.get("confirm-rule").disabled, false);
@@ -177,6 +180,44 @@ test("Add rule requires explicit coverage and blocks empty submission and save",
   assert.equal(fixture.state().rules.length, 2);
   await controls.get("save").listeners.click();
   assert.equal(fixture.requests.at(-1).type, "save-site-rules");
+});
+
+test("every supported rule type has one shared presentation label", () => {
+  assert.equal(RULE_TYPE_DESCRIPTORS.length, SCOPE_PRIORITY.length);
+  for (const type of SCOPE_PRIORITY) assert.equal(typeof RULE_TYPE_LABELS[type], "string", type);
+});
+
+
+test("rule editor previews shared effective scope live without persistence", async () => {
+  const fixture = await ruleEditorFixture({ url: "https://first.example/docs/page?b=2&a=1#section" });
+  const controls = fixture.controls;
+  const beforeRequests = fixture.requests.length;
+  controls.get("add").listeners.click();
+  assert.equal(controls.get("effective-scope").textContent, "domain_tree|first.example");
+  controls.get("selected-scope").value = "domain_tree";
+  controls.get("selected-scope").listeners.change();
+  assert.equal(controls.get("effective-scope").textContent, "domain_tree|first.example");
+  controls.get("selected-scope").value = "url_subpaths";
+  controls.get("selected-scope").listeners.input();
+  assert.equal(controls.get("effective-scope").textContent, "url_subpaths|https://first.example/docs/page");
+  controls.get("selected-scope").value = "url_exact_parameters";
+  controls.get("selected-scope").listeners.change();
+  assert.equal(controls.get("effective-scope").textContent, "url_exact_parameters|https://first.example/docs/page?a=1&b=2");
+  assert.equal(fixture.requests.length, beforeRequests);
+  assert.equal(fixture.state().rules.length, 1);
+});
+
+
+test("editing a synchronized rule shows only concise status and preserves its identity until Save", async () => {
+  const synced = { ...fixtureRule(), sync: { id: "0123456789abcdef0123456789abcdef", revision: 3, modifiedAt: null, modifiedByClientId: null, origin: "legacy", conflict: null } };
+  const fixture = await ruleEditorFixture({ rule: synced, syncEnabled: true });
+  fixture.edit(synced);
+  assert.equal(fixture.controls.get("editor-sync-status").textContent, "Sync: enabled · rev. 3");
+  const id = fixture.state().rules[0].sync.id;
+  fixture.controls.get("selected-scope").value = "domain_tree";
+  fixture.controls.get("selected-scope").listeners.change();
+  assert.equal(fixture.state().rules[0].sync.id, id);
+  assert.equal(fixture.requests.filter((request) => request.type === "prepare-site-rule").length, 0);
 });
 
 
@@ -209,7 +250,7 @@ test("Reload confirms only when staged rules or editor fields have changed", asy
 test("schema migration renames automatic dimensions and removes legacy preferences without changing saved rules", () => {
   const rule = fixtureRule();
   const migrated = normalizeConfig({ schemaVersion: 4, global: { defaultRememberType: "page", defaultScope: "path", defaultWidth: 1400, defaultHeight: 900 }, rules: [rule] });
-  assert.equal(migrated.schemaVersion, 6);
+  assert.equal(migrated.schemaVersion, 7);
   assert.equal(Object.hasOwn(migrated.global, "defaultRememberType"), false);
   assert.equal(Object.hasOwn(migrated.global, "defaultScope"), false);
   assert.equal(Object.hasOwn(migrated.global, "defaultWidth"), false);

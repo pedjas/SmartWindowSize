@@ -13,9 +13,11 @@
     <button id="add" type="button">Add rule</button>
     <form id="editor" hidden>
       <h2 id="editor-title">Add rule</h2>
-      <label>Rule coverage <select id="selected-scope" required><option value="" disabled selected>Select rule scope…</option><option value="domain_tree">This domain and its subdomains</option><option value="domain_exact">This domain only</option><option value="url_subpaths">This URL and its subpaths</option><option value="url_any_parameters">This URL — any parameters</option><option value="url_exact_parameters">This URL — exact query parameters</option><option value="url_non_exact_parameters">This URL — non-exact query parameters</option></select></label>
+      <label>Rule coverage <select id="selected-scope" required><option value="domain_tree">This domain and its subdomains</option><option value="domain_www_pair">Domain with and without www</option><option value="domain_exact">Exact hostname</option><option value="url_subpaths">This URL and its subpaths</option><option value="url_any_parameters">This URL — any parameters</option><option value="url_exact_parameters">This URL — exact query parameters</option><option value="url_non_exact_parameters">This URL — non-exact query parameters</option></select></label>
+      <div class="effective-scope-preview"><span>Effective scope</span><output id="effective-scope">—</output><span id="editor-sync-status" hidden></span></div>
       <label class="remember"><input id="remember-position" type="checkbox"> Remember position for this rule</label>
       <label class="remember"><input id="remember-monitor" type="checkbox"> Remember monitor for this rule</label>
+      <label class="remember"><input id="rule-enabled" type="checkbox" checked> Enabled</label>
       <div class="editor-actions"><button id="confirm-rule" type="submit">Add rule</button><button id="cancel-edit" type="button">Cancel</button></div>
     </form>
   </main>

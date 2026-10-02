@@ -1,5 +1,5 @@
 /**
- * SmartWindowSize | Version: 1.0.53 | Last updated: 2026-10-01 10:45:00 +02:00
+ * SmartWindowSize | Version: 1.1.0 | Last updated: 2026-10-02 18:20:11 +02:00
  *
  * Coordinates serialized window operations, validated configuration writes,
  * unique dialogs, and session diagnostics.
@@ -15,9 +15,11 @@ import { createRuleId, normalizeScopeType } from "../core/config.js";
 import { applyConfigurationAction, applySiteRuleEdits, fingerprint } from "../core/configuration-actions.js";
 import { windowBoundsChanged } from "../core/window-bounds.js";
 import { scopeForUrl, toUrl } from "../core/rule-matcher.js";
+import { canonicalMatchKey, abbreviateOpaqueId, syncRuleIdForScope } from "../core/rule-sync.js";
 import { clearDiagnostics, loadDiagnostics, recordDiagnostic } from "../core/diagnostics.js";
 import { readSession, writeSession, removeSession } from "../core/runtime-session.js";
 import { getTabIfExists, isMissingTabError } from "../core/tab-lifecycle.js";
+import { activeCloudRecord, applyCloudDefinition, deletedCloudRecord, readCloudRule, sameSemanticDefinition, writeCloudRule } from "../core/rule-sync-store.js";
 
 /** Per-window operation chains prevent rule application and persistence races. @type {Map<number, Promise<unknown>>} */
 const windowQueues = new Map();
@@ -81,6 +83,51 @@ const EDITOR_OPENING_LEASE_MS = 30000;
 
 /** Bounded handshake timers keyed by editor token; session storage remains the authoritative lifecycle record. @type {Map<string, ReturnType<typeof setTimeout>>} */
 const editorOpeningTimers = new Map();
+
+/** Serializes native-cloud reconciliation so storage events never overwrite a newer local update. @type {Promise<unknown>} */
+let ruleSyncQueue = Promise.resolve();
+
+/** Prevents local storage echoes caused by remote reconciliation from recursively starting another pass. @type {boolean} */
+let applyingCloudRules = false;
+
+
+/** Reconciles every local sync-aware rule with its independent cloud record. @returns {Promise<void>} Completion after writes and safe local imports. */
+function reconcileRulesWithCloud() {
+  ruleSyncQueue = ruleSyncQueue.catch(() => undefined).then(async () => {
+    const config = await loadConfig();
+    if (!config.global.syncRules || !chrome.storage.sync) return;
+    const removals = new Set();
+    const replacements = new Map();
+    for (const rule of config.rules) {
+      const cloud = await readCloudRule(rule.sync.id);
+      if (!cloud) { await writeCloudRule(rule.sync.id, activeCloudRecord(rule)); continue; }
+      if (cloud.status.deleted) {
+        if (cloud.status.revision >= rule.sync.revision) removals.add(rule.id);
+        else await writeCloudRule(rule.sync.id, activeCloudRecord(rule));
+        continue;
+      }
+      const localDefinition = activeCloudRecord(rule).definition;
+      if (cloud.status.revision > rule.sync.revision) replacements.set(rule.id, applyCloudDefinition(rule, cloud));
+      else if (rule.sync.revision > cloud.status.revision) await writeCloudRule(rule.sync.id, activeCloudRecord(rule));
+      else if (sameSemanticDefinition(localDefinition, cloud.definition)) continue;
+      else if (rule.sync.origin === "user" && cloud.status.origin === "user" && rule.sync.modifiedByClientId !== cloud.status.modifiedByClientId &&
+        Date.parse(rule.sync.modifiedAt ?? "") !== Date.parse(cloud.status.modifiedAt ?? "")) {
+        if (Date.parse(rule.sync.modifiedAt) > Date.parse(cloud.status.modifiedAt)) await writeCloudRule(rule.sync.id, activeCloudRecord(rule));
+        else replacements.set(rule.id, applyCloudDefinition(rule, cloud));
+      } else replacements.set(rule.id, { ...rule, sync: { ...rule.sync, conflict: { kind: "equal-revision-definition-conflict", cloud: cloud.status } } });
+    }
+    for (const tombstone of Object.values(config.sync.tombstones ?? {})) {
+      const cloud = await readCloudRule(tombstone.id);
+      if (!cloud || cloud.status.revision <= tombstone.revision) await writeCloudRule(tombstone.id, deletedCloudRecord(tombstone));
+    }
+    if (removals.size || replacements.size) {
+      applyingCloudRules = true;
+      try { await updateConfig((current) => ({ ...current, rules: current.rules.filter((rule) => !removals.has(rule.id)).map((rule) => replacements.get(rule.id) ?? rule) })); }
+      finally { applyingCloudRules = false; }
+    }
+  });
+  return ruleSyncQueue;
+}
 
 
 /** Announces access or saved-rule changes without exposing source URLs. @returns {void} */
@@ -693,7 +740,8 @@ async function applyForTab(tab, useSavedPosition = false, traceSource = { eventN
         expectedRuleId: resolved.rule.id
       });
     };
-    const application = await changeWindow(tab.windowId, () => applyResolvedRule(tab.windowId, resolved, canApply, useSavedPosition, undefined, rememberExpectedGeometry));
+    const restoreSavedPosition = useSavedPosition || resolved.status === "RULE" && resolved.rule.position.enabled;
+    const application = await changeWindow(tab.windowId, () => applyResolvedRule(tab.windowId, resolved, canApply, restoreSavedPosition, undefined, rememberExpectedGeometry));
     if (resolved.status === "RULE" && application.sizeAdjusted) {
       await updateConfig((latest) => {
         const current = resolveRule(tab.url, latest);
@@ -921,10 +969,58 @@ async function dispatchAction(message, sender, registry) {
     }
     return { url: entry.url, rules: matchingRulesForUrl(entry.url, config), ownsEditor: registry.owner === entryId,
       writable: registry.owner === entryId && sourceValid && config.global.enabled,
-      hasOwner: registry.owner !== null, sourceValid, enabled: config.global.enabled };
+      hasOwner: registry.owner !== null, sourceValid, enabled: config.global.enabled, syncEnabled: config.global.syncRules };
   }
   if (message.type === "prepare-site-rule") requireEditorOwner(registry, message);
-  if (message.type === "get-diagnostics") return { entries: await loadDiagnostics((await loadConfig()).global.debug) };
+  if (message.type === "get-diagnostics") {
+    const config = await loadConfig();
+    const entries = await loadDiagnostics(config.global.debug);
+    return {
+      entries: config.global.diagnosticLevel === "verbose" ? entries : entries.filter((entry) => entry.kind === "error" || entry.kind === "warning"),
+      diagnosticLevel: config.global.diagnosticLevel,
+      rulesSync: {
+        enabled: config.global.syncRules,
+        clientId: config.sync.clientId,
+        clientIdCompact: abbreviateOpaqueId(config.sync.clientId),
+        rules: await Promise.all(config.rules.map(async (rule) => ({
+          id: rule.id,
+          canonicalRuleIdentity: canonicalMatchKey(rule.scope),
+          sync: rule.sync,
+          cloud: config.global.syncRules ? await readCloudRule(rule.sync.id).catch((error) => ({ error: error.message })) : null
+        }))),
+        tombstones: Object.values(config.sync.tombstones ?? {})
+      }
+    };
+  }
+  if (message.type === "refresh-rule-from-cloud") {
+    const config = await loadConfig();
+    const rule = config.rules.find((candidate) => candidate.id === message.ruleId);
+    if (!rule) throw new Error("This local rule no longer exists.");
+    const cloud = await readCloudRule(rule.sync.id);
+    if (!cloud) throw new Error("No synchronized rule definition is available.");
+    if (cloud.status.deleted) throw new Error("The synchronized state marks this rule as deleted.");
+    applyingCloudRules = true;
+    try { await updateConfig((current) => ({ ...current, rules: current.rules.map((candidate) => candidate.id === rule.id ? applyCloudDefinition(candidate, cloud) : candidate) })); }
+    finally { applyingCloudRules = false; }
+    return { ok: true };
+  }
+  if (message.type === "set-sync-seed-size") {
+    const config = await loadConfig();
+    if (!config.global.syncRules) throw new Error("Rules Sync is not enabled.");
+    const tab = await sourceTab(message, sender);
+    if (!toUrl(tab?.url) || (message.windowId !== undefined && tab.windowId !== message.windowId)) throw new Error("The current page is no longer available for Rules Sync.");
+    const resolved = resolveRule(tab.url, config);
+    const rule = resolved.status === "RULE" ? resolved.rule : null;
+    if (!rule) throw new Error("No applicable synchronized rule exists for the current page.");
+    const window = await chrome.windows.get(tab.windowId);
+    if (!Number.isInteger(window.width) || !Number.isInteger(window.height)) throw new Error("The current window size is unavailable.");
+    const cloud = await readCloudRule(rule.sync.id);
+    const record = cloud && !cloud.status.deleted ? cloud : activeCloudRecord(rule);
+    record.definition.seedWidth = window.width;
+    record.definition.seedHeight = window.height;
+    await writeCloudRule(rule.sync.id, record);
+    return { ok: true };
+  }
   if (message.type === "report-client-error") {
     if (typeof message.operation !== "string" || typeof message.message !== "string") throw new Error("Invalid diagnostic entry.");
     await reportDiagnostic(message.operation, new Error(message.message));
@@ -1078,11 +1174,15 @@ async function dispatchAction(message, sender, registry) {
     const existing = message.existing;
     const value = existing?.scope.type === type ? existing.scope.value : scopeForUrl(tab.url, type);
     const display = await displayForRule(null, current);
-    const stagedRule = { id: existing?.id ?? createRuleId(), scope: { type, value }, enabled: existing?.enabled ?? true,
+    const scope = { type, value };
+    const syncId = await syncRuleIdForScope(scope);
+    const now = new Date().toISOString();
+    const stagedRule = { id: existing?.id ?? createRuleId(), scope, enabled: message.enabled !== false,
       width: current.width, height: current.height,
       position: message.rememberPosition ? { enabled: true, x: current.left, y: current.top } : { enabled: false, x: null, y: null },
       display: message.rememberMonitor && display ? { enabled: true, id: display.id } : { enabled: false, id: null },
-      lastUpdatedAt: new Date().toISOString() };
+      lastUpdatedAt: now,
+      sync: existing?.sync?.id === syncId ? existing.sync : { id: syncId, revision: 1, modifiedAt: now, modifiedByClientId: config.sync.clientId, origin: "user", conflict: null } };
     return { rule: stagedRule };
   }
   throw new Error("Unsupported extension request.");
@@ -1123,6 +1223,7 @@ async function initialize() {
   await refreshContextMenus(activeTabsAtStartup[0]);
   await chrome.action.setBadgeText({ text: "" });
   await scheduleIconRefresh();
+  await reconcileRulesWithCloud();
 }
 
 
@@ -1132,9 +1233,12 @@ registerContextMenuActions((message) => dispatchRequest(message), reportDiagnost
 chrome.runtime.onInstalled.addListener(() => refreshContextMenus().catch((error) => reportDiagnostic("Register context menu", error)));
 chrome.runtime.onStartup.addListener(() => refreshContextMenus().catch((error) => reportDiagnostic("Register context menu", error)));
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== "local" || !changes.smartWindowSizeConfig) return;
-  notifyRuleEditors();
-  refreshContextMenus().then(scheduleIconRefresh).catch((error) => reportDiagnostic("Synchronize configuration", error));
+  if (area === "local" && changes.smartWindowSizeConfig) {
+    notifyRuleEditors();
+    refreshContextMenus().then(scheduleIconRefresh).catch((error) => reportDiagnostic("Synchronize configuration", error));
+    if (!applyingCloudRules) reconcileRulesWithCloud().catch((error) => reportDiagnostic("Reconcile Rules Sync", error));
+  }
+  if (area === "sync") reconcileRulesWithCloud().catch((error) => reportDiagnostic("Apply Rules Sync change", error));
 });
 chrome.tabs.onActivated.addListener(({ tabId }) => {
   getTabIfExists(tabId).then(async (tab) => {

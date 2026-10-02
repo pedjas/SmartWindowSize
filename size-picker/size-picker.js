@@ -143,7 +143,6 @@ async function initialize() {
   heightInput.min = "240";
   widthInput.max = String(maximum.width);
   heightInput.max = String(maximum.height);
-  limitsElement.textContent = `Allowed: 320 × 240 to ${maximum.width} × ${maximum.height} px.`;
   selectCurrentSize(response.current);
 }
 

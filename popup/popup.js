@@ -4,8 +4,10 @@
  */
 
 import { APP_VERSION } from "../core/app-version.js";
-import { toUrl } from "../core/rule-matcher.js";
+import { canonicalizeScopeValue, toUrl } from "../core/rule-matcher.js";
 import { request, installClientErrors, runClientAction } from "../core/client.js";
+import { RULE_TYPE_LABELS } from "../core/rule-types.js";
+import { rememberedMonitorLabel } from "../core/rule-presentation.js";
 
 
 /** Installs visible client error reporting before requesting background state. */
@@ -25,21 +27,29 @@ const label = document.querySelector("#active-rule");
 
 /** Current outer-window dimension label. @type {HTMLElement} */
 const currentSize = document.querySelector("#current-size");
+const activeRuleDetails = document.querySelector("#active-rule-details");
 
 
 /** User-facing coverage labels keyed by persisted rule scope type. @type {Readonly<Record<string, string>>} */
-const ruleLabels = Object.freeze({
-  domain_tree: "This domain and its subdomains",
-  domain_exact: "This domain only",
-  url_subpaths: "This URL and its subpaths",
-  url_any_parameters: "This URL — any parameters",
-  url_exact_parameters: "This URL — exact query parameters",
-  url_non_exact_parameters: "This URL — non-exact query parameters"
-});
-currentSize.textContent = state.currentSize ? `Current size: ${state.currentSize.width} × ${state.currentSize.height} px` : "Current size: unavailable";
-if (state.resolved?.status === "RULE") label.textContent = `Active rule: ${ruleLabels[state.resolved.rule.scope.type] ?? "Unknown rule"}`;
+if (state.resolved?.status === "RULE") {
+  const rule = state.resolved.rule;
+  label.hidden = true;
+  activeRuleDetails.hidden = false;
+  document.querySelector("#active-rule-type").textContent = RULE_TYPE_LABELS[rule.scope.type] ?? "Unknown rule";
+  document.querySelector("#active-rule-scope").textContent = canonicalizeScopeValue(rule.scope.type, rule.scope.value) ?? "—";
+  document.querySelector("#active-rule-size").textContent = `${rule.width} × ${rule.height}`;
+  const positionRow = document.querySelector("#active-rule-position-row");
+  positionRow.hidden = !rule.position?.enabled || !Number.isInteger(rule.position.x) || !Number.isInteger(rule.position.y);
+  document.querySelector("#active-rule-position").textContent = positionRow.hidden ? "" : `${rule.position.x}, ${rule.position.y}`;
+  const monitor = rememberedMonitorLabel(rule);
+  const monitorRow = document.querySelector("#active-rule-monitor-row");
+  monitorRow.hidden = !monitor;
+  document.querySelector("#active-rule-monitor").textContent = monitor ?? "";
+  currentSize.hidden = true;
+}
 else if (state.resolved?.status === "DISABLED") label.textContent = state.config?.global?.enabled === false ? "SmartWindowSize is disabled." : "The matching saved rule is disabled.";
 else label.textContent = state.error ?? "No saved rule for this site.";
+if (state.resolved?.status !== "RULE") currentSize.textContent = state.currentSize ? `Current size: ${state.currentSize.width} × ${state.currentSize.height} px` : "Current size: unavailable";
 
 
 /** Disables window-affecting actions when the global extension switch is off. */

@@ -18,6 +18,8 @@ import * as matcher from "../core/rule-matcher.js";
 import * as diagnostics from "../core/diagnostics.js";
 import * as session from "../core/runtime-session.js";
 import * as tabLifecycle from "../core/tab-lifecycle.js";
+import * as ruleSync from "../core/rule-sync.js";
+import * as ruleSyncStore from "../core/rule-sync-store.js";
 import { windowBoundsChanged } from "../core/window-bounds.js";
 
 
@@ -35,6 +37,7 @@ async function browserFixture(rules = [], useFirefoxWindowEvents = false, firefo
   config.global.ruleRetentionDays = -1;
   const local = { smartWindowSizeConfig: config };
   const ephemeral = {};
+  const cloud = {};
   const listeners = {};
   const updates = [];
   const iconUpdates = [];
@@ -79,7 +82,7 @@ async function browserFixture(rules = [], useFirefoxWindowEvents = false, firefo
   }
 
   globalThis.chrome = {
-    storage: { local: area(local, "local"), session: area(ephemeral, "session"), onChanged: event("storage") },
+    storage: { local: area(local, "local"), session: area(ephemeral, "session"), sync: area(cloud, "sync"), onChanged: event("storage") },
     runtime: { getURL: (path) => `chrome-extension://test/${path}`, sendMessage: async (message) => { messages.push(message); }, openOptionsPage: async () => { optionsOpened += 1; },
       onMessage: event("message"), onInstalled: event("installed"), onStartup: event("startup") },
     action: { setIcon: async (value) => { iconUpdates.push(value); }, setTitle: async () => {}, setBadgeText: async () => {} },
@@ -150,7 +153,7 @@ async function browserFixture(rules = [], useFirefoxWindowEvents = false, firefo
     onRemoved: globalThis.chrome.windows.onRemoved,
     ...(firefoxHasBoundsChanged ? { onBoundsChanged: globalThis.chrome.windows.onBoundsChanged } : {})
   } : undefined;
-  const bindings = { ...storage, ...resolver, ...updater, ...manager, ...icons, ...menus, ...configModule, ...actions, ...matcher, ...diagnostics, ...session, ...tabLifecycle,
+  const bindings = { ...storage, ...resolver, ...updater, ...manager, ...icons, ...menus, ...configModule, ...actions, ...matcher, ...diagnostics, ...session, ...tabLifecycle, ...ruleSync, ...ruleSyncStore,
     windowBoundsChanged, APP_VERSION: "test", chrome: globalThis.chrome, Date, URL, structuredClone,
     browser: firefoxWindowEvents ? { windows: firefoxWindowEvents } : undefined,
     setTimeout: (callback) => { const id = ++nextTimer; timers.set(id, callback); return id; }, clearTimeout: (id) => timers.delete(id) };
@@ -164,7 +167,7 @@ async function browserFixture(rules = [], useFirefoxWindowEvents = false, firefo
   }
 
   await settle();
-  return { local, ephemeral, windows, tabs, updates, iconUpdates, messages, listeners, created: () => created, optionsOpened: () => optionsOpened,
+  return { local, ephemeral, cloud, windows, tabs, updates, iconUpdates, messages, listeners, created: () => created, optionsOpened: () => optionsOpened,
     omitCreatedRuleDialogFromQuery: (value) => { omitCreatedRuleDialogFromQuery = value; },
     createdPopupStartsBlank: (value) => { createdPopupStartsBlank = value; },
     tabGetFailure: (error) => { tabGetFailure = error; },
@@ -241,6 +244,35 @@ test("manual resize without a rule never turns on remembering", async () => {
   await browser.dispatch({ type: "resize-window", windowId: 7, width: 900, height: 700 });
   await browser.settle();
   assert.equal(browser.local.smartWindowSizeConfig.rules.length, 0);
+});
+
+
+test("enabling Rules Sync publishes one compact record without local geometry", async () => {
+  const saved = rule();
+  saved.position = { enabled: true, x: 250, y: 120 };
+  saved.display = { enabled: true, id: "right" };
+  const browser = await browserFixture([saved]);
+  const base = structuredClone(browser.local.smartWindowSizeConfig.global);
+  await browser.request({ type: "save-global-settings", base, global: { ...base, syncRules: true } });
+  await browser.settle();
+  const synced = Object.values(browser.cloud);
+  assert.equal(synced.length, 1);
+  assert.equal(synced[0].definition.scope.value, "alpha.example");
+  assert.equal(synced[0].definition.rememberPosition, true);
+  assert.equal(synced[0].definition.rememberMonitor, true);
+  assert.equal("enabled" in synced[0].definition, false);
+  assert.equal("x" in synced[0].definition, false);
+  assert.equal("display" in synced[0].definition, false);
+  const before = structuredClone(browser.local.smartWindowSizeConfig.rules[0]);
+  Object.assign(browser.windows.get(7), { width: 1111, height: 777 });
+  await browser.dispatch({ type: "set-sync-seed-size", tabId: 1, windowId: 7 });
+  await browser.settle();
+  const updated = Object.values(browser.cloud)[0];
+  assert.equal(updated.definition.seedWidth, 1111);
+  assert.equal(updated.definition.seedHeight, 777);
+  assert.equal(browser.local.smartWindowSizeConfig.rules[0].width, before.width);
+  assert.equal(browser.local.smartWindowSizeConfig.rules[0].sync.id, before.sync.id);
+  assert.equal(browser.local.smartWindowSizeConfig.rules[0].sync.revision, before.sync.revision);
 });
 
 

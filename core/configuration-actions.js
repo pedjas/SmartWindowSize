@@ -32,7 +32,10 @@ export function applyConfigurationAction(config, message) {
     const current = config.rules.find((rule) => rule.id === message.ruleId);
     if (!current) return config;
     requireUnchanged(current, message.base);
-    return { ...config, rules: config.rules.filter((rule) => rule.id !== message.ruleId) };
+    const syncId = current.sync?.id;
+    const tombstones = { ...(config.sync?.tombstones ?? {}) };
+    if (syncId) tombstones[syncId] = { id: syncId, revision: current.sync.revision + 1, modifiedAt: new Date().toISOString(), modifiedByClientId: config.sync.clientId, deleted: true };
+    return { ...config, sync: { ...config.sync, tombstones }, rules: config.rules.filter((rule) => rule.id !== message.ruleId) };
   }
   if (message.type === "set-rule-enabled") {
     const current = config.rules.find((rule) => rule.id === message.ruleId);
@@ -43,7 +46,18 @@ export function applyConfigurationAction(config, message) {
   }
   if (message.type === "import-configuration" || message.type === "reset-configuration") {
     requireUnchanged(config, message.base);
-    return message.type === "reset-configuration" ? createDefaultConfig() : validateConfigImport(message.config);
+    if (message.type === "reset-configuration") {
+      const reset = createDefaultConfig();
+      return { ...reset, sync: { clientId: config.sync.clientId, tombstones: {} } };
+    }
+    const imported = validateConfigImport(message.config);
+    // Backup sync history is local bookkeeping, not portable cloud authority.
+    // Retaining its original schema marker lets storage assign legacy metadata.
+    return {
+      ...imported,
+      schemaVersion: message.config.schemaVersion,
+      sync: { clientId: config.sync.clientId, tombstones: {} }
+    };
   }
   throw new Error("Unsupported configuration action.");
 }
@@ -57,5 +71,20 @@ export function applySiteRuleEdits(config, url, message) {
   requireUnchanged(current, message.baseRules);
   if (!Array.isArray(message.rules) || message.rules.some((rule) => !ruleMatchesUrl(rule, url))) throw new Error("Every edited rule must cover the source page.");
   const currentIds = new Set(current.map((rule) => rule.id));
-  return validateConfigImport({ ...config, rules: [...config.rules.filter((rule) => !currentIds.has(rule.id)), ...message.rules] });
+  const candidate = validateConfigImport({ ...config, rules: [...config.rules.filter((rule) => !currentIds.has(rule.id)), ...message.rules] });
+  const beforeById = new Map(current.map((rule) => [rule.id, rule]));
+  const afterById = new Map(candidate.rules.map((rule) => [rule.id, rule]));
+  const tombstones = { ...(candidate.sync?.tombstones ?? {}) };
+  for (const [id, before] of beforeById) {
+    const after = afterById.get(id);
+    if (!after || before.scope.type !== after.scope.type || before.scope.value !== after.scope.value) {
+      if (before.sync?.id) tombstones[before.sync.id] = { id: before.sync.id, revision: before.sync.revision + 1, modifiedAt: new Date().toISOString(), modifiedByClientId: candidate.sync.clientId, deleted: true };
+      if (after) delete after.sync;
+      continue;
+    }
+    if (before.sync && (before.position.enabled !== after.position.enabled || before.display.enabled !== after.display.enabled)) {
+      after.sync = { ...before.sync, revision: before.sync.revision + 1, modifiedAt: new Date().toISOString(), modifiedByClientId: candidate.sync.clientId, origin: "user", conflict: null };
+    }
+  }
+  return { ...candidate, sync: { ...candidate.sync, tombstones } };
 }

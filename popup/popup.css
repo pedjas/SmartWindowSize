@@ -1,13 +1,20 @@
 body { font: 14px system-ui, sans-serif; margin: 0; min-width: 350px; color: #18212f; }
 main { padding: 16px; display: grid; gap: 10px; }
 h1 { font-size: 18px; margin: 0; } p { margin: 0; color: #52606d; }
+#active-rule-details { display: grid; gap: 8px; min-inline-size: 0; margin: 0; padding: 14px; border: 1px solid #93c5fd; border-radius: 7px; }
+#active-rule-details dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px 12px; margin: 0; }
+#active-rule-details div { min-width: 0; } #active-rule-details dt { color: #52606d; font-size: 12px; } #active-rule-details dd { margin: 2px 0 0; overflow-wrap: anywhere; }
 label { display: grid; gap: 4px; }
 .position-option { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 select { min-width: 250px; }
 button { background: #fff; border: 1px solid #94a3b8; border-radius: 5px; padding: 8px; text-align: left; cursor: pointer; }
-button:hover { background: #eef6ff; }
+button:hover:not(:disabled) { background: #eef6ff; }
+button:disabled { cursor: not-allowed; opacity: .55; color: GrayText; background: color-mix(in srgb, ButtonFace 82%, Canvas); border-color: color-mix(in srgb, ButtonBorder 55%, Canvas); }
+button:disabled:hover, button:disabled:active { background: color-mix(in srgb, ButtonFace 82%, Canvas); transform: none; }
 
 /* Follow the browser or system theme instead of relying on a browser-specific popup canvas. */
 :root { color-scheme: light dark; }
 body { color: CanvasText; background: Canvas; }
-button, button:hover { color: ButtonText; background: ButtonFace; border-color: ButtonBorder; }
+#active-rule-details { color: CanvasText; background: Canvas; }
+button, button:hover:not(:disabled) { color: ButtonText; background: ButtonFace; border-color: ButtonBorder; }
+button:disabled { color: GrayText; background: color-mix(in srgb, ButtonFace 82%, Canvas); border-color: color-mix(in srgb, ButtonBorder 55%, Canvas); }

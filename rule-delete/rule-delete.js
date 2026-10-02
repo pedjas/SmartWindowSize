@@ -6,6 +6,8 @@ import { APP_VERSION } from "../core/app-version.js";
 import { SCOPE_PRIORITY } from "../core/rule-matcher.js";
 import { matchingRulesForUrl, resolveRule } from "../core/rule-resolver.js";
 import { request, installClientErrors, runClientAction, showClientError } from "../core/client.js";
+import { canonicalMatchKey, canonicalMatchKeyForUrl } from "../core/rule-sync.js";
+import { RULE_TYPE_LABELS } from "../core/rule-types.js";
 
 
 /** Browser tab identifier whose matching rules are being edited. @type {number} */
@@ -34,14 +36,7 @@ async function requestEditor(message) {
 
 
 /** Human-readable labels keyed by persisted coverage type. @type {Record<string, string>} */
-const labels = Object.freeze({
-  domain_tree: "This domain and its subdomains",
-  domain_exact: "This domain only",
-  url_subpaths: "This URL and its subpaths",
-  url_any_parameters: "This URL — any parameters",
-  url_exact_parameters: "This URL — exact query parameters",
-  url_non_exact_parameters: "This URL — non-exact query parameters"
-});
+const labels = RULE_TYPE_LABELS;
 
 
 /** Rule list staged locally until Save changes is clicked. @type {{url: string, rules: object[], resolvedRuleId?: string|null}|null} */
@@ -87,6 +82,35 @@ const scopeInput = document.querySelector("#selected-scope");
 /** Position-persistence checkbox inside the rule editor. @type {HTMLInputElement} */
 const positionInput = document.querySelector("#remember-position");
 const monitorInput = document.querySelector("#remember-monitor");
+const enabledInput = document.querySelector("#rule-enabled");
+
+/** Returns the stored local display identifier without inventing unavailable display metadata. @param {object} rule Saved rule. @returns {string} Local monitor value or neutral marker. */
+function rememberedMonitorValue(rule) {
+  return rule.display?.enabled && typeof rule.display.id === "string" && rule.display.id ? rule.display.id : "—";
+}
+
+/** Creates a decorative locally bundled Bootstrap icon. @param {string} name Asset filename. @returns {HTMLImageElement} Non-announced icon element. */
+function materialIcon(name) {
+  const icon = document.createElement("img");
+  icon.src = `../icons/material/${name}.svg`;
+  icon.alt = "";
+  return icon;
+}
+
+
+/** Renders the exact prospective matcher identity without changing staged or persisted state. @returns {void} Updates the secondary editor preview. */
+function renderEffectiveScopePreview() {
+  const preview = document.querySelector("#effective-scope");
+  preview.textContent = state && SCOPE_PRIORITY.includes(scopeInput.value) ? canonicalMatchKeyForUrl(state.url, scopeInput.value) ?? "—" : "—";
+  const syncStatus = document.querySelector("#editor-sync-status");
+  const existing = editingRuleId ? state?.rules.find((rule) => rule.id === editingRuleId) : null;
+  if (!existing?.sync) {
+    syncStatus.hidden = true;
+    return;
+  }
+  syncStatus.hidden = false;
+  syncStatus.textContent = existing.sync.conflict ? "Sync: Conflict" : state.syncEnabled ? `Sync: enabled · rev. ${existing.sync.revision}` : "Sync: disabled";
+}
 
 
 /** Recalculates the active staged rule from the shared coverage priority. @returns {void} Updates the bold row state. */
@@ -118,20 +142,40 @@ function render() {
     coverage.className = "details";
     coverage.textContent = rule.scope.value;
     details.append(coverage);
+    const effectiveScope = document.createElement("span");
+    effectiveScope.className = "details";
+    effectiveScope.textContent = `Effective scope: ${canonicalMatchKey(rule.scope) ?? "—"}`;
+    const enabled = document.createElement("span");
+    enabled.className = "details";
+    enabled.textContent = rule.enabled ? "Enabled" : "Disabled";
+    details.append(effectiveScope, enabled);
+    const inspect = document.createElement("details");
+    inspect.className = "rule-inspect-details";
+    const summary = document.createElement("summary");
+    summary.textContent = "Rule details";
+    const metadata = document.createElement("span");
+    metadata.className = "details";
+    const modified = rule.sync?.modifiedAt && !Number.isNaN(Date.parse(rule.sync.modifiedAt)) ? new Date(rule.sync.modifiedAt).toLocaleString() : "Legacy migration (unordered)";
+    metadata.textContent = `Effective scope: ${canonicalMatchKey(rule.scope) ?? "—"}\nRemembered monitor: ${rememberedMonitorValue(rule)}\nSync Rule ID: ${rule.sync?.id ?? "—"}\nRevision: ${rule.sync?.revision ?? "—"}\nModified: ${modified}\nModified by: ${rule.sync?.modifiedByClientId ?? "—"}\nOrigin: ${rule.sync?.origin === "legacy" ? "Migrated from previous version" : "Created locally"}\nSync: ${rule.sync?.conflict ? "Conflict" : state.syncEnabled ? "Sync enabled" : "Sync disabled"}`;
+    inspect.append(summary, metadata);
+    details.append(inspect);
     const actions = document.createElement("div");
     actions.className = "row-actions";
     const edit = document.createElement("button");
     edit.type = "button";
-    edit.textContent = "Edit";
+    edit.className = "icon-button";
+    edit.setAttribute("aria-label", "Edit rule");
+    edit.title = "Edit rule";
+    edit.append(materialIcon("edit"));
     edit.title = "Edit this rule";
     edit.disabled = busy || !state.writable;
     edit.addEventListener("click", () => openEditor(rule));
     const remove = document.createElement("button");
     remove.type = "button";
-    remove.className = "delete";
-    remove.setAttribute("aria-label", `Delete ${labels[rule.scope.type]} rule`);
-    remove.title = `Delete ${labels[rule.scope.type]} rule`;
-    remove.textContent = "×";
+    remove.className = "icon-button delete";
+    remove.setAttribute("aria-label", "Delete rule");
+    remove.title = "Delete rule";
+    remove.append(materialIcon("delete"));
     remove.disabled = busy || !state.writable;
     remove.addEventListener("click", () => {
       if (busy || !state.writable) return;
@@ -151,16 +195,19 @@ function render() {
 function openEditor(rule = null) {
   if (busy || !state?.writable) return;
   editingRuleId = rule?.id ?? null;
-  scopeInput.value = rule?.scope.type ?? "";
+  scopeInput.value = rule?.scope.type ?? "domain_tree";
+  if (!SCOPE_PRIORITY.includes(scopeInput.value)) scopeInput.value = "domain_tree";
   positionInput.checked = rule?.position?.enabled === true;
   monitorInput.checked = rule?.display?.enabled === true;
-  editorBaseline = { scope: scopeInput.value, rememberPosition: positionInput.checked, rememberMonitor: monitorInput.checked };
+  enabledInput.checked = rule?.enabled !== false;
+  editorBaseline = { scope: scopeInput.value, enabled: enabledInput.checked, rememberPosition: positionInput.checked, rememberMonitor: monitorInput.checked };
   document.querySelector("#editor-title").textContent = rule ? "Edit rule" : "Add rule";
   document.querySelector("#confirm-rule").textContent = rule ? "Update rule" : "Add rule";
   document.querySelector("#confirm-rule").title = rule ? "Update this staged rule using the current window size" : "Add a staged rule using the current window size";
   editor.hidden = false;
   addButton.hidden = true;
   synchronizeScopeSelection();
+  renderEffectiveScopePreview();
   editor.scrollIntoView?.({ block: "center", inline: "nearest" });
   scopeInput.focus();
 }
@@ -173,6 +220,7 @@ function closeEditor() {
   editor.hidden = true;
   addButton.hidden = false;
   synchronizeScopeSelection();
+  renderEffectiveScopePreview();
 }
 
 
@@ -180,7 +228,7 @@ function closeEditor() {
 function hasUnsavedChanges() {
   const normalized = (rules) => [...rules].sort((left, right) => left.id.localeCompare(right.id));
   const rulesChanged = JSON.stringify(normalized(state?.rules ?? [])) !== JSON.stringify(normalized(baseRules));
-  const editorChanged = !editor.hidden && editorBaseline !== null && (scopeInput.value !== editorBaseline.scope || positionInput.checked !== editorBaseline.rememberPosition || monitorInput.checked !== editorBaseline.rememberMonitor);
+  const editorChanged = !editor.hidden && editorBaseline !== null && (scopeInput.value !== editorBaseline.scope || enabledInput.checked !== editorBaseline.enabled || positionInput.checked !== editorBaseline.rememberPosition || monitorInput.checked !== editorBaseline.rememberMonitor);
   return rulesChanged || editorChanged;
 }
 
@@ -195,16 +243,18 @@ function synchronizeScopeSelection() {
   document.querySelector("#cancel-edit").disabled = blocked;
   addButton.disabled = blocked;
   scopeInput.disabled = blocked;
+  enabledInput.disabled = blocked;
   positionInput.disabled = blocked;
   for (const button of list.querySelectorAll("button")) button.disabled = blocked;
   document.querySelector("#reload").disabled = busy;
   document.querySelector("#enable-editing").disabled = busy || !state?.sourceValid || !state?.enabled;
+  renderEffectiveScopePreview();
 }
 
 
 /** Samples current source-window bounds and creates a staged rule. @param {object|null} existing Existing staged rule, if any. @returns {Promise<object>} Rule ready for staging, not yet persisted. */
 async function ruleFromEditor(existing) {
-  const response = await requestEditor({ type: "prepare-site-rule", url: state.url, scope: scopeInput.value, rememberPosition: positionInput.checked, rememberMonitor: monitorInput.checked, existing });
+  const response = await requestEditor({ type: "prepare-site-rule", url: state.url, scope: scopeInput.value, enabled: enabledInput.checked, rememberPosition: positionInput.checked, rememberMonitor: monitorInput.checked, existing });
   return response.rule;
 }
 
@@ -251,6 +301,8 @@ for (const button of document.querySelectorAll("button")) button.title ||= butto
 
 addButton.addEventListener("click", () => openEditor());
 scopeInput.addEventListener("change", synchronizeScopeSelection);
+scopeInput.addEventListener("input", synchronizeScopeSelection);
+enabledInput.addEventListener("change", synchronizeScopeSelection);
 document.querySelector("#cancel-edit").addEventListener("click", () => { if (!busy && state?.writable) closeEditor(); });
 editor.addEventListener("submit", async (event) => {
   event.preventDefault();

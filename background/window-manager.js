@@ -88,7 +88,9 @@ export function positionForRule(rule, display) {
 
 
 /**
- * Selects a rule's saved display or the display that currently contains the window.
+ * Selects a rule's saved display before absolute virtual-screen bounds are computed.
+ * A missing saved display is a normal hardware-layout change and falls back to the
+ * primary display (or first available display) without manufacturing an ID.
  * @param {object|null} rule Resolved rule with optional display data.
  * @param {chrome.windows.Window} windowInfo Current browser window used when no display is saved.
  * @returns {Promise<chrome.system.display.DisplayUnitInfo|undefined>} Selected display.

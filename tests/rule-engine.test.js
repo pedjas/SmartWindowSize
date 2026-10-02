@@ -65,6 +65,28 @@ test("domain tree uses the current hostname without public suffix inference", ()
 });
 
 
+test("a normalized www domain-tree rule covers the apex, www, and subdomains", () => {
+  const config = normalizeConfig({ global: {}, rules: [rule("domain_tree", "www.example.com", 1200)] });
+  assert.equal(config.rules[0].scope.value, "example.com");
+  for (const url of ["https://example.com/", "https://www.example.com/", "https://foo.example.com/"]) assert.equal(resolveRule(url, config).status, "RULE");
+});
+
+test("saved monitor bounds use absolute coordinates while preserving position opt-in", () => {
+  const display = { workArea: { left: -1920, top: 0, width: 1920, height: 1080 } };
+  const current = { left: 120, top: 80, width: 900, height: 700 };
+  const rule = { width: 1000, height: 700, position: { enabled: true, x: -1800, y: 90 } };
+  assert.deepEqual(constrainWindowBounds(current, { width: 1000, height: 700 }, rule, display, true), { width: 1000, height: 700, left: -1800, top: 90, sizeAdjusted: false });
+  assert.equal(constrainWindowBounds(current, { width: 1000, height: 700 }, rule, display, false).left, -1000);
+});
+
+test("www-pair scope covers only the apex and www hostname", () => {
+  const config = normalizeConfig({ global: {}, rules: [rule("domain_www_pair", "www.example.com", 1200)] });
+  assert.equal(config.rules[0].scope.value, "example.com");
+  for (const url of ["https://example.com/", "https://www.example.com/"]) assert.equal(resolveRule(url, config).status, "RULE");
+  assert.equal(resolveRule("https://catalog.example.com/", config).status, "NONE");
+});
+
+
 test("legacy scope types migrate into the explicit coverage model", () => {
   const config = normalizeConfig({ global: { defaultRememberType: "domain" }, rules: [rule("subdomain", "blog.example.com", 1200)] });
   assert.equal(Object.hasOwn(config.global, "defaultRememberType"), false);

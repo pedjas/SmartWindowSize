@@ -5,7 +5,7 @@
 
 
 /** Rule coverage order from most specific to least specific. @type {readonly string[]} */
-export const SCOPE_PRIORITY = Object.freeze(["url_exact_parameters", "url_non_exact_parameters", "url_any_parameters", "url_subpaths", "domain_exact", "domain_tree"]);
+export const SCOPE_PRIORITY = Object.freeze(["url_exact_parameters", "url_non_exact_parameters", "url_any_parameters", "url_subpaths", "domain_exact", "domain_www_pair", "domain_tree"]);
 
 
 /** Parses an HTTP(S) URL and rejects unsupported browser or malformed URLs. @param {string} urlText URL text from a browser API. @returns {URL|null} Parsed supported URL or null. */
@@ -38,10 +38,33 @@ export function urlBase(url) {
 export function scopeForUrl(urlText, type) {
   const url = toUrl(urlText);
   if (!url) return null;
-  if (type === "domain_tree" || type === "domain_exact") return url.hostname.toLowerCase();
+  if (type === "domain_tree") return url.hostname.toLowerCase().replace(/^www\./, "");
+  if (type === "domain_www_pair") return url.hostname.toLowerCase().replace(/^www\./, "");
+  if (type === "domain_exact") return url.hostname.toLowerCase();
   if (type === "url_subpaths" || type === "url_any_parameters") return urlBase(url);
   if (type === "url_exact_parameters" || type === "url_non_exact_parameters") return `${urlBase(url)}?${canonicalQuery(url.searchParams)}`;
   return null;
+}
+
+
+/**
+ * Converts a persisted scope value into the exact normalized value used by the
+ * matcher. Configuration validation, duplicate detection, legacy migration,
+ * and sync identity must all call this function rather than interpret raw
+ * stored values independently.
+ *
+ * @param {string} type Normalized rule coverage type.
+ * @param {string} value Candidate persisted scope value.
+ * @returns {string|null} Canonical matching value, or null when invalid.
+ */
+export function canonicalizeScopeValue(type, value) {
+  if (typeof value !== "string") return null;
+  if (type === "domain_tree" || type === "domain_www_pair" || type === "domain_exact") {
+    const hostname = scopeForUrl(`https://${value}/`, type);
+    const raw = value.toLowerCase();
+    return type === "domain_tree" || type === "domain_www_pair" ? (raw === hostname || raw === `www.${hostname}` ? hostname : null) : (hostname === raw ? hostname : null);
+  }
+  return scopeForUrl(value, type);
 }
 
 
@@ -77,6 +100,7 @@ export function ruleMatchesUrl(rule, urlText) {
   const host = url.hostname.toLowerCase();
   if (rule.scope.type === "domain_tree") return host === rule.scope.value || host.endsWith(`.${rule.scope.value}`);
   if (rule.scope.type === "domain_exact") return host === rule.scope.value;
+  if (rule.scope.type === "domain_www_pair") return host === rule.scope.value || host === `www.${rule.scope.value}`;
   if (rule.scope.type === "url_subpaths") return matchesPathAndSubpaths(rule.scope.value, url);
   if (rule.scope.type === "url_any_parameters") return rule.scope.value === urlBase(url);
   const separator = rule.scope.value.indexOf("?");

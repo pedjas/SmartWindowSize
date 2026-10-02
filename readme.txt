@@ -25,15 +25,33 @@ Configuration
 Configuration contains global settings, saved rules, diagnostics, and JSON
 backup and restore.
 
+
+Rules Sync
+
+Rules Sync is optional and uses your browser account's built-in sync service.
+SmartWindowSize does not operate a server or require a separate account. Rule
+scope and remember choices can sync, while enabled state, actual size, position,
+monitor, diagnostics, and runtime state remain local to each computer.
+
+Cloud dimensions are a starting size only for a browser receiving a new rule.
+Use Set current size as synced default from the toolbar context menu on a page
+with an applicable rule to update that starting size. Refresh from cloud is in
+the rule's Sync details and does not replace this computer's size or placement.
+Rules show an Effective scope so you can see exactly what they match.
+Set rules for this site also previews the Effective scope before saving a rule.
+Effective scope shows which part of addresses this rule will actually apply to.
+For This domain and its subdomains, www.example.com becomes example.com because
+the rule covers the base domain and its subdomains. Domain with and without www
+uses the same base value but covers only those two hostnames; Exact hostname keeps www.
+Paths and parameters are shown only when the selected rule type uses them.
+Set rules for this site also previews the Effective scope before saving a rule.
+
 Disable Extension enabled to stop SmartWindowSize from resizing, saving, or
 moving windows. The toolbar icon becomes gray while the extension is disabled.
 
 Automatically set window size if no rules is optional. When it is enabled,
 Width and Height are applied to a newly opened window for a website that has
 no saved rule. It does not create a rule.
-
-Export JSON before removing the extension if you want to keep your saved
-rules. Reloading an installed extension keeps its settings; removing it from
 
 Click Save settings after changing the size. Manual input selects Custom.
 Toggling automatic sizing keeps the entered dimensions.
@@ -42,11 +60,13 @@ Toggling automatic sizing keeps the entered dimensions.
 Rules
 -----
 
-Rules can apply to a whole domain, one exact domain, a URL and its subpaths,
+Rules can apply to a whole domain and its subdomains, a domain with and without
+www, one exact hostname, a URL and its subpaths,
 or a URL with different levels of query-parameter matching.
 
-More specific rules take priority over broader rules. For example, a rule for
-one URL takes priority over a rule for its domain.
+More specific rules take priority over broader rules: exact query parameters,
+non-exact query parameters, any parameters, URL and subpaths, exact hostname,
+domain with and without www, then domain and its subdomains.
 
 The Set rules for this site dialog shows every rule that matches the current
 website. You can add, edit, or delete rules there. Changes are saved only when

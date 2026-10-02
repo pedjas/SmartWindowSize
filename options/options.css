@@ -1,4 +1,9 @@
 body { font: 15px system-ui, sans-serif; color: #18212f; background: #f8fafc; margin: 0; } main { max-width: 900px; margin: 32px auto; display: grid; gap: 24px; } #configuration-panel { display: grid; gap: 24px; } section, form { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px #cbd5e1; display: grid; gap: 10px; } h1,h2 { margin: 0; } h1 { display: flex; align-items: center; gap: 10px; } h1 img { flex: 0 0 auto; } h2 { font-size: 18px; } nav { display: flex; gap: 8px; border-bottom: 1px solid #cbd5e1; } nav button[aria-selected="true"] { background: #2563eb; color: white; } nav button.has-errors { color: #b42318; border-color: #b42318; } label { display: flex; gap: 8px; align-items: center; } .vertical-option { font-weight: 400; } input[type=number] { width: 100px; } table { width: 100%; border-collapse: collapse; } th,td { padding: 8px; border-bottom: 1px solid #e2e8f0; text-align: left; } button { width: fit-content; padding: 8px 12px; cursor: pointer; } .scope-description { margin-top: 16px; background: #f8fafc; box-shadow: none; border: 1px solid #cbd5e1; } .scope-description p { margin: 0; } .scope-description dl { margin: 0; display: grid; gap: 6px; } .scope-description dt { font-weight: 700; } .scope-description dd { margin: 0 0 8px; } code { overflow-wrap: anywhere; } #diagnostic-log { max-height: 520px; margin: 0; overflow: auto; padding: 12px; background: #0f172a; color: #e2e8f0; white-space: pre-wrap; } [hidden] { display: none !important; }
+#client-identity { display: flex; gap: 8px; align-items: center; color: #52606d; font-size: 13px; }
+#client-identity code { font-size: inherit; }
+#environment-sync { padding: 12px; background: #f8fafc; box-shadow: none; border: 1px solid #cbd5e1; }
+#environment-sync h3 { margin: 0; font-size: 14px; }
+#environment-sync-log { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .rules-divider { width: 100%; border: 0; border-top: 1px solid #cbd5e1; margin: 16px 0 32px; }
 #error { color: #b42318; margin: 0; }
 #error:empty { display: none; }
@@ -9,8 +14,19 @@ body { font: 15px system-ui, sans-serif; color: #18212f; background: #f8fafc; ma
 .rule-card-value { margin: 0; overflow-wrap: anywhere; }
 .rule-card-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 8px 16px; }
 .rule-card-details div { display: grid; gap: 2px; }
+.rule-card-details strong, .sync-details strong { white-space: pre-line; }
 .rule-card-details span { color: #52606d; font-size: 12px; }
-.rule-card-actions { display: flex; justify-content: flex-end; }
+.rule-card-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.rule-card-actions .refresh-rule { margin-left: auto; }
+.effective-scope { padding: 9px 10px; background: #f1f5f9; border-left: 3px solid #64748b; overflow-wrap: anywhere; }
+.effective-scope div { display: grid; gap: 3px; }
+.effective-scope span, .sync-details span { color: #52606d; font-size: 12px; }
+.sync-details { display: grid; gap: 10px; padding: 8px 0 0; border-top: 1px solid #e2e8f0; }
+.sync-details summary { cursor: pointer; font-weight: 600; }
+.sync-details-grid { display: grid; grid-template-columns: minmax(320px, 2fr) repeat(2, minmax(150px, 1fr)); gap: 8px 16px; overflow-wrap: anywhere; }
+.sync-details-grid div:nth-child(1), .sync-details-grid div:nth-child(2) { grid-column: 1; }
+.sync-details-grid div { display: grid; gap: 2px; }
+@media (max-width: 620px) { .sync-details-grid { grid-template-columns: 1fr; } .sync-details-grid div:nth-child(1), .sync-details-grid div:nth-child(2) { grid-column: auto; } }
 /* Keeps the related custom default dimensions compact and aligned. */
 .default-dimensions { display: flex; gap: 12px; }
 .default-dimensions label { flex: 0 0 auto; }
@@ -19,9 +35,31 @@ body { font: 15px system-ui, sans-serif; color: #18212f; background: #f8fafc; ma
 .automatic-window-size legend { padding: 0 6px; font-weight: 600; }
 .automatic-window-size legend label { font-weight: inherit; }
 .preset-row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+.rules-sync { display: grid; gap: 8px; margin: 0; padding: 14px; border: 1px solid #93c5fd; border-radius: 7px; }
+.rules-sync p { margin: 0; }
 
 /* Use CSS system colors so Configuration follows the active browser theme. */
 :root { color-scheme: light dark; }
 body, section, form, .scope-description, .rule-card, .automatic-window-size { color: CanvasText; background: Canvas; }
+.effective-scope { background: color-mix(in srgb, Canvas 88%, Highlight); }
 button { color: ButtonText; background: ButtonFace; border-color: ButtonBorder; }
 nav button[aria-selected="true"] { color: HighlightText; background: Highlight; }
+
+/* Shared compact controls keep primary dialog actions visually dominant. */
+.compact-secondary, .icon-button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 32px; border: 1px solid #94a3b8; border-radius: 5px; background: ButtonFace; color: ButtonText; cursor: pointer; }
+.compact-secondary { padding: 5px 9px; font-size: 13px; }
+.icon-button { width: 32px; padding: 6px; }
+.compact-secondary img { width: 16px; height: 16px; }
+.icon-button img { width: 18px; height: 18px; }
+.compact-secondary:hover, .icon-button:hover { filter: brightness(.96); }
+.compact-secondary:active, .icon-button:active { transform: translateY(1px); }
+.compact-secondary:focus-visible, .icon-button:focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
+.compact-secondary:disabled, .icon-button:disabled { cursor: not-allowed; opacity: .5; }
+.icon-button.delete { color: #b42318; border-color: #f0b8b3; }
+.icon-button.delete:hover, .icon-button.delete:focus-visible { color: #8f1912; border-color: #b42318; background: #fff5f4; }
+input:not([type=checkbox]), select { min-height: 34px; box-sizing: border-box; padding: 5px 8px; border: 1px solid #94a3b8; border-radius: 5px; font: inherit; background: Field; color: FieldText; }
+input[type=checkbox] { width: 16px; height: 16px; accent-color: Highlight; }
+input:focus-visible, select:focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
+.secondary-tabs { display: flex; gap: 4px; border-bottom: 1px solid #cbd5e1; }
+.secondary-tabs button { padding: 5px 9px; font-size: 13px; border: 0; border-radius: 5px 5px 0 0; background: transparent; }
+.secondary-tabs button[aria-selected="true"] { color: HighlightText; background: Highlight; }

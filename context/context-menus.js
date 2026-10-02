@@ -5,6 +5,7 @@
 import { loadConfig } from "../core/storage.js";
 import { resolveContextMenuTab } from "../core/context-menu-tab.js";
 import { toUrl } from "../core/rule-matcher.js";
+import { resolveRule } from "../core/rule-resolver.js";
 
 
 /**
@@ -52,6 +53,14 @@ async function activeTabSupportsRules() {
 }
 
 
+/** Determines whether the active page has an enabled resolved rule eligible to update its cloud seed size. @param {object} config Current configuration. @param {object|undefined} tab Current tab. @returns {Promise<boolean>} Whether the seed action is applicable. */
+async function activeTabSupportsSyncSeed(config, tab) {
+  if (!config.global.enabled || !config.global.syncRules) return false;
+  if (!tab) tab = await resolveContextMenuTab(undefined, (queryInfo) => chrome.tabs.query(queryInfo));
+  return Boolean(toUrl(tab?.url) && resolveRule(tab.url, config).status === "RULE");
+}
+
+
 /**
  * Updates site-rule availability for the tab that is actually showing the toolbar menu.
  *
@@ -62,6 +71,7 @@ export async function refreshSiteRuleMenu(tab) {
   const config = await loadConfig();
   if (!tab) tab = await resolveContextMenuTab(undefined, (queryInfo) => chrome.tabs.query(queryInfo));
   await updateContextMenu("delete-matching-rules", { enabled: config.global.enabled && Boolean(toUrl(tab?.url)) });
+  await updateContextMenu("set-sync-seed-size", { enabled: await activeTabSupportsSyncSeed(config, tab) });
   const refreshed = chrome.contextMenus.refresh?.();
   if (refreshed?.then) await refreshed;
 }
@@ -75,6 +85,7 @@ export async function refreshSiteRuleMenu(tab) {
 export async function createContextMenus(currentTab = undefined) {
   const config = await loadConfig();
   const canSetRules = config.global.enabled && (currentTab ? Boolean(toUrl(currentTab.url)) : await activeTabSupportsRules().catch(() => false));
+  const canSetSyncSeed = await activeTabSupportsSyncSeed(config, currentTab).catch(() => false);
   const usesFirefoxOptions = typeof chrome.runtime.getBrowserInfo === "function";
   await chrome.contextMenus.removeAll();
   const entries = [
@@ -82,6 +93,7 @@ export async function createContextMenus(currentTab = undefined) {
     ...(!usesFirefoxOptions ? [{ id: "global-separator", type: "separator", contexts: ["action"] }] : []),
     { id: "bring-window-on-screen", title: "Bring window on screen", enabled: config.global.enabled, contexts: ["action"] },
     { id: "delete-matching-rules", title: "Set rules for this site", enabled: canSetRules, contexts: ["action"] },
+    { id: "set-sync-seed-size", title: "Set current size as synced default", enabled: canSetSyncSeed, contexts: ["action"] },
     ...(!usesFirefoxOptions ? [{ id: "window-separator", type: "separator", contexts: ["action"] }] : []),
     ...(usesFirefoxOptions ? [{ id: "open-options", title: "Options", contexts: ["action"] }] : []),
     { id: "about", title: "About SmartWindowSize", contexts: ["action"] }
@@ -106,6 +118,7 @@ async function handleContextMenuClick(info, tab, dispatch) {
     if (!toUrl(targetTab.url)) return;
     return requestMenuAction({ type: "open-rule-editor", tabId: targetTab.id, sourceWindowId: targetTab.windowId, sourceUrl: targetTab.url });
   }
+  if (info.menuItemId === "set-sync-seed-size") return requestMenuAction({ type: "set-sync-seed-size", tabId: targetTab.id, windowId: targetTab.windowId });
   const actionType = info.menuItemId === "bring-window-on-screen" ? "bring-window-on-screen" : null;
   if (actionType) {
     await requestMenuAction({ type: actionType, tabId: targetTab.id, windowId: targetTab.windowId });

@@ -2,6 +2,8 @@ import { normalizeConfig } from "../core/config.js";
 import { APP_VERSION } from "../core/app-version.js";
 import { WINDOW_PRESETS, findHorizontalPresetIndex, orientedPresetSize } from "../core/window-presets.js";
 import { request, installClientErrors, runClientAction, showClientError } from "../core/client.js";
+import { canonicalMatchKey } from "../core/rule-sync.js";
+import { RULE_TYPE_LABELS } from "../core/rule-types.js";
 
 
 /**
@@ -14,16 +16,6 @@ const KEY = "smartWindowSizeConfig";
 
 
 /** User-facing rule-scope labels keyed by their stored internal type. @type {Readonly<Record<string, string>>} */
-const RULE_SCOPE_LABELS = Object.freeze({
-  domain_tree: "This domain and its subdomains",
-  domain_exact: "This domain only",
-  url_subpaths: "This URL and its subpaths",
-  url_any_parameters: "This URL — any parameters",
-  url_exact_parameters: "This URL — exact query parameters",
-  url_non_exact_parameters: "This URL — non-exact query parameters"
-});
-
-
 /** Mutable normalized configuration represented by the options form. @type {object} */
 let config = normalizeConfig(null);
 
@@ -60,9 +52,20 @@ document.querySelector("#rules-tab").addEventListener("click", () => selectOptio
 document.querySelector("#diagnostics-tab").addEventListener("click", () => selectOptionsTab("diagnostics"));
 selectOptionsTab(["#rules", "#diagnostics"].includes(location.hash) ? location.hash.slice(1) : "configuration");
 
+/** Switches the lightweight Diagnostics sub-tab without affecting its event data. @param {string} tab Requested Diagnostics view. */
+function selectDiagnosticsTab(tab) {
+  for (const [name, panel] of Object.entries({ log: "diagnostics-log", "environmentSync": "environment-sync" })) {
+    document.querySelector(`#${panel}`).hidden = name !== tab;
+    document.querySelector(`#${name === "log" ? "diagnostics-log" : "environment-sync"}-tab`).setAttribute("aria-selected", String(name === tab));
+  }
+}
+document.querySelector("#diagnostics-log-tab").addEventListener("click", () => selectDiagnosticsTab("log"));
+document.querySelector("#environment-sync-tab").addEventListener("click", () => selectDiagnosticsTab("environmentSync"));
+
 
 /** Human-readable diagnostic entries currently returned by the service worker. @type {Array<object>} */
 let diagnostics = [];
+let rulesSyncDiagnostics = null;
 
 
 /** Formats one session diagnostic as a complete copyable text record. @param {object} entry Stored diagnostic entry. @returns {string} User-facing and technical diagnostic text. */
@@ -75,12 +78,30 @@ function formatDiagnostic(entry) {
 /** Renders the current session-only diagnostic log in Configuration. @returns {Promise<void>} Completes after the DOM reflects the latest entries. */
 async function renderDiagnostics() {
   const response = await request({ type: "get-diagnostics" });
-  diagnostics = (response?.entries ?? []).filter((entry) => entry.kind === "error");
+  diagnostics = response?.entries ?? [];
+  rulesSyncDiagnostics = response?.rulesSync ?? null;
   document.querySelector("#diagnostic-status").textContent = diagnostics.length
-    ? `${diagnostics.length} error${diagnostics.length === 1 ? "" : "s"} recorded in this browser session.`
+    ? `${diagnostics.length} diagnostic event${diagnostics.length === 1 ? "" : "s"} recorded in this browser session.`
     : "No diagnostics available.";
   document.querySelector("#diagnostic-log").textContent = diagnostics.length ? diagnostics.map(formatDiagnostic).join("\n\n") : "No diagnostics available.";
+  document.querySelector("#environment-sync-log").textContent = rulesSyncDiagnostics ? formatRulesSyncDiagnostics(rulesSyncDiagnostics) : "Environment information unavailable.";
   document.querySelector("#diagnostics-tab").classList.remove("has-errors");
+}
+
+
+/** Formats inspectable Rules Sync identity metadata for copyable local diagnostics. @param {object} sync Rules Sync diagnostic snapshot. @returns {string} Diagnostic text. */
+function formatRulesSyncDiagnostics(sync) {
+  const rules = sync.rules.map((rule) => `Rule: ${rule.id}\nEffective scope: ${rule.canonicalRuleIdentity}\nSync Rule ID: ${rule.sync?.id ?? "—"}\nRevision: ${rule.sync?.revision ?? "—"}\nModified: ${rule.sync?.modifiedAt ?? "legacy/unordered"}\nModified by: ${rule.sync?.modifiedByClientId ?? "—"}\nOrigin: ${rule.sync?.origin ?? "—"}\nConflict: ${JSON.stringify(rule.sync?.conflict ?? null)}\nCloud record: ${JSON.stringify(rule.cloud ?? "not checked", null, 2)}`).join("\n\n");
+  return `Rules Sync\nEnabled: ${sync.enabled ? "Yes" : "No"}\nClient ID: ${sync.clientId ?? "—"}\nIdentity algorithm: SHA-256(Effective scope), first 128 bits\n\n${rules || "No saved rules."}\n\nTombstones:\n${JSON.stringify(sync.tombstones, null, 2)}`;
+}
+
+
+/** Renders the persistent local client identity above every Options tab. @returns {void} Updates compact and full values. */
+function renderClientIdentity() {
+  const client = config.sync?.clientId ?? "—";
+  const element = document.querySelector("#client-id");
+  element.textContent = client;
+  element.title = client;
 }
 
 
@@ -90,7 +111,9 @@ for (const button of document.querySelectorAll("button")) button.title ||= butto
 
 /** Copies the displayed diagnostic log for sharing without requiring Extension Manager access. @returns {Promise<void>} Completes after clipboard writing is requested. */
 async function copyDiagnostics() {
-  const text = diagnostics.length ? diagnostics.map(formatDiagnostic).join("\n\n") : "No diagnostics available.";
+  const records = diagnostics.map(formatDiagnostic);
+  if (rulesSyncDiagnostics) records.push(`Environment / Sync information\n${formatRulesSyncDiagnostics(rulesSyncDiagnostics)}`);
+  const text = records.length ? records.join("\n\n") : "No diagnostics available.";
   await navigator.clipboard.writeText(text);
 }
 
@@ -119,6 +142,7 @@ function renderGlobal() {
   form.elements.automaticWindowSize.checked = config.global.useDefaultSize;
   renderDefaultPresets(true);
   formDirty = false;
+  renderClientIdentity();
 }
 
 
@@ -195,6 +219,64 @@ function createRuleDetail(label, value) {
 }
 
 
+/** Returns the stored local display identifier without inventing unavailable display metadata. @param {object} rule Saved rule. @returns {string} Local monitor value or neutral marker. */
+function rememberedMonitorValue(rule) {
+  return rule.display?.enabled && typeof rule.display.id === "string" && rule.display.id ? rule.display.id : "—";
+}
+
+/** Creates a decorative locally bundled Bootstrap icon. @param {string} name Asset filename. @returns {HTMLImageElement} Non-announced icon element. */
+function materialIcon(name) {
+  const icon = document.createElement("img");
+  icon.src = `../icons/material/${name}.svg`;
+  icon.alt = "";
+  return icon;
+}
+
+
+/** Formats genuine timestamps in the user's local date-and-time format. @param {string|null|undefined} value ISO timestamp. @returns {string} Readable timestamp or legacy marker. */
+function formatLocalDateTime(value) {
+  if (typeof value !== "string" || Number.isNaN(Date.parse(value))) return "Legacy migration (unordered)";
+  const date = new Date(value);
+  return `${date.toLocaleDateString()}\n${date.toLocaleTimeString()}`;
+}
+
+
+/** Returns a user-facing description of a rule's local provenance. @param {string|undefined} origin Stored origin marker. @returns {string} Readable origin. */
+function originLabel(origin) {
+  return origin === "legacy" ? "Migrated from previous version" : "Created locally";
+}
+
+
+/** Creates compact sync state derived only from local metadata that the UI can actually distinguish. @param {object} rule Saved rule. @returns {string} Concise status. */
+function syncSummary(rule) {
+  if (rule.sync?.conflict) return "Conflict";
+  if (!config.global.syncRules) return "Sync disabled";
+  return `Sync enabled · rev. ${rule.sync?.revision ?? "—"}`;
+}
+
+
+/** Creates hidden technical sync metadata while preserving full copyable values. @param {object} rule Saved rule. @param {string} effectiveScope Matcher-derived identity text. @returns {HTMLDetailsElement} Sync details disclosure. */
+function createSyncDetails(rule, effectiveScope) {
+  const disclosure = document.createElement("details");
+  disclosure.className = "sync-details";
+  const summary = document.createElement("summary");
+  summary.textContent = "Sync details";
+  const detailGrid = document.createElement("div");
+  detailGrid.className = "sync-details-grid";
+  detailGrid.append(
+    createRuleDetail("Effective scope", effectiveScope),
+    createRuleDetail("Sync Rule ID", rule.sync?.id ?? "Preparing migration"),
+    createRuleDetail("Revision", String(rule.sync?.revision ?? "—")),
+    createRuleDetail("Modified", formatLocalDateTime(rule.sync?.modifiedAt)),
+    createRuleDetail("Modified by", rule.sync?.modifiedByClientId ?? "—"),
+    createRuleDetail("Origin", originLabel(rule.sync?.origin)),
+    createRuleDetail("Conflict", rule.sync?.conflict ? JSON.stringify(rule.sync.conflict) : "None")
+  );
+  disclosure.append(summary, detailGrid);
+  return disclosure;
+}
+
+
 /** Renders all saved rules as readable cards and binds their deletion controls. @returns {void} */
 function renderRules() {
   document.querySelector("#rules-empty").hidden = config.rules.length !== 0;
@@ -204,21 +286,27 @@ function renderRules() {
     const header = document.createElement("div");
     header.className = "rule-card-header";
     const scope = document.createElement("h3");
-    scope.textContent = RULE_SCOPE_LABELS[rule.scope.type] ?? "Unknown scope";
+    scope.textContent = RULE_TYPE_LABELS[rule.scope.type] ?? "Unknown scope";
     const status = document.createElement("strong");
     status.textContent = rule.enabled ? "Enabled" : "Disabled";
     header.append(scope, status);
     const value = document.createElement("p");
     value.className = "rule-card-value";
     value.textContent = rule.scope.value;
+    const effectiveScope = canonicalMatchKey(rule.scope);
+    const effective = document.createElement("div");
+    effective.className = "effective-scope";
+    effective.append(createRuleDetail("Effective scope", effectiveScope ?? "Unavailable"));
     const details = document.createElement("div");
     details.className = "rule-card-details";
     details.append(
       createRuleDetail("Size", `${rule.width} × ${rule.height}`),
       createRuleDetail("Remember position", rule.position.enabled ? "Yes" : "No"),
       createRuleDetail("Remember monitor", rule.display.enabled ? "Yes" : "No"),
+      createRuleDetail("Monitor", rememberedMonitorValue(rule)),
       createRuleDetail("Position", rule.position.enabled ? `${rule.position.x},${rule.position.y}` : ""),
-      createRuleDetail("Last updated", new Date(rule.lastUpdatedAt).toLocaleDateString())
+      createRuleDetail("Last updated", formatLocalDateTime(rule.lastUpdatedAt)),
+      createRuleDetail("Sync", syncSummary(rule))
     );
     const actions = document.createElement("div");
     actions.className = "rule-card-actions";
@@ -232,8 +320,15 @@ function renderRules() {
     remove.title = "Delete this saved rule";
     remove.disabled = rulesLocked;
     remove.addEventListener("click", () => mutate({ type: "delete-rule", ruleId: rule.id, base: rule }));
-    actions.append(toggle, remove);
-    card.append(header, value, details, actions);
+    const refresh = document.createElement("button");
+    refresh.type = "button";
+    refresh.className = "compact-secondary refresh-rule";
+    refresh.append(materialIcon("refresh"), "Refresh from cloud");
+    refresh.title = "Replace shared rule behavior from browser sync while keeping this computer's size and placement";
+    refresh.disabled = rulesLocked || !config.global.syncRules;
+    refresh.addEventListener("click", () => runClientAction("Refresh rule from cloud", () => request({ type: "refresh-rule-from-cloud", ruleId: rule.id }).then(refreshRuleAccess)));
+    actions.append(toggle, remove, refresh);
+    card.append(header, value, effective, details, createSyncDetails(rule, effectiveScope ?? "Unavailable"), actions);
     return card;
   }));
 }
@@ -260,7 +355,7 @@ form.addEventListener("submit", (event) => {
   global.automaticWidth = Number(form.elements.Width.value);
   global.automaticHeight = Number(form.elements.Height.value);
   global.useDefaultSize = form.elements.automaticWindowSize.checked;
-  for (const name of ["enabled", "rememberMonitor"]) {
+  for (const name of ["enabled", "rememberMonitor", "syncRules"]) {
     if (form.elements[name]) global[name] = form.elements[name].checked;
   }
   mutate({ type: "save-global-settings", global, base: globalBase }, true);
@@ -296,16 +391,19 @@ chrome.runtime.onMessage.addListener((message) => {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes[KEY]) {
     config = normalizeConfig(changes[KEY].newValue);
+    renderClientIdentity();
     renderRules();
     if (!formDirty && !saving) renderGlobal();
   }
 });
+document.querySelector("#copy-client-id").addEventListener("click", () => runClientAction("Copy client ID", () => navigator.clipboard.writeText(config.sync?.clientId ?? "")));
 
 
 /** Reads current locking and rules while preserving unsaved global settings. @returns {Promise<void>} Updated rule table and mutation availability. */
 async function refreshRuleAccess() {
   const response = await request({ type: "get-configuration" });
   config = response.config;
+  renderClientIdentity();
   rulesLocked = response.rulesLocked;
   document.querySelector("#import").disabled = rulesLocked;
   document.querySelector("#reset").disabled = rulesLocked;

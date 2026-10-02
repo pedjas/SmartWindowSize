@@ -39,7 +39,7 @@ globalThis.chrome = createChromeStorageMock();
 
 
 /** Shared storage module loaded after its required browser API mock exists. */
-const { updateConfig, loadConfig, replaceConfig } = await import("../core/storage.js");
+const { updateConfig, loadConfig, replaceConfig, migrateConfig } = await import("../core/storage.js");
 
 
 /** Builds one persisted domain-tree rule for concurrent resize-update tests. @param {string} host Rule hostname. @returns {object} Rule fixture. */
@@ -79,4 +79,48 @@ test("invalid import leaves persistent configuration untouched", async () => {
   const before = structuredClone(storedConfiguration);
   await assert.rejects(replaceConfig({ rules: [] }), /Invalid/);
   assert.deepEqual(storedConfiguration, before);
+});
+
+
+test("legacy migration assigns stable matcher-derived sync identity without changing local state", async () => {
+  const legacy = { schemaVersion: 6, global: { enabled: true }, rules: [{ ...savedRule("EXAMPLE.com"),
+    position: { enabled: true, x: 14, y: 28 }, display: { enabled: true, id: "monitor-a" }, enabled: false }] };
+  const first = await migrateConfig(legacy);
+  const second = await migrateConfig(first);
+  assert.equal(first.global.syncRules, false);
+  assert.equal(first.rules[0].scope.value, "example.com");
+  assert.equal(first.rules[0].enabled, false);
+  assert.deepEqual(first.rules[0].position, { enabled: true, x: 14, y: 28 });
+  assert.deepEqual(first.rules[0].display, { enabled: true, id: "monitor-a" });
+  assert.equal(first.rules[0].sync.origin, "legacy");
+  assert.equal(first.rules[0].sync.modifiedAt, null);
+  assert.equal(first.rules[0].sync.modifiedByClientId, first.sync.clientId);
+  assert.equal(first.rules[0].sync.id, second.rules[0].sync.id);
+  assert.equal(first.sync.clientId, second.sync.clientId);
+});
+
+
+test("legacy www domain-tree rules migrate to the same identity as their apex equivalent", async () => {
+  const www = await migrateConfig({ schemaVersion: 6, global: {}, rules: [savedRule("www.example.com")] });
+  const apex = await migrateConfig({ schemaVersion: 6, global: {}, rules: [savedRule("example.com")] });
+  assert.equal(www.rules[0].scope.value, "example.com");
+  assert.equal(www.rules[0].sync.id, apex.rules[0].sync.id);
+  assert.equal(www.rules[0].width, 800);
+});
+
+
+test("temporary pre-normalization sync IDs are replaced by the current effective identity", async () => {
+  const migrated = await migrateConfig({ schemaVersion: 7, global: {}, sync: { clientId: "client-a", tombstones: {} }, rules: [{ ...savedRule("www.example.com"), sync: { id: "f".repeat(32), revision: 2, modifiedAt: null, modifiedByClientId: "client-a", origin: "legacy", conflict: null } }] });
+  assert.equal(migrated.rules[0].scope.value, "example.com");
+  assert.notEqual(migrated.rules[0].sync.id, "f".repeat(32));
+  assert.equal(migrated.rules[0].sync.revision, 2);
+});
+
+
+test("legacy backup replacement assigns legacy sync metadata and retains this installation client id", async () => {
+  const clientId = storedConfiguration.sync.clientId;
+  await replaceConfig({ schemaVersion: 6, global: { enabled: true }, rules: [savedRule("backup.example")] });
+  assert.equal(storedConfiguration.sync.clientId, clientId);
+  assert.equal(storedConfiguration.rules[0].sync.origin, "legacy");
+  assert.equal(storedConfiguration.rules[0].sync.modifiedAt, null);
 });

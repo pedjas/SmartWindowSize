@@ -5,18 +5,33 @@ h1 { font-size: 18px; margin: 0; }
 h2 { font-size: 15px; margin: 0; }
 p { margin: 0; color: #52606d; }
 ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
-li { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; background: white; border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px; }
+li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: start; background: white; border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px; }
 li.active { font-weight: 700; border-color: #2563eb; }
 li strong, .details { display: block; }
 .details { color: #52606d; font-size: 12px; font-weight: 400; margin-top: 3px; }
+.rule-inspect-details { margin-top: 7px; font-weight: 400; }
+.rule-inspect-details summary { cursor: pointer; font-size: 12px; }
+.rule-inspect-details .details { white-space: pre-wrap; overflow-wrap: anywhere; }
 .row-actions, .editor-actions, footer { display: flex; gap: 8px; align-items: center; }
-.delete { color: #b42318; font-size: 18px; line-height: 1; padding: 4px 9px; }
+.row-actions { align-self: start; }
+.icon-button, .compact-secondary { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 32px; border: 1px solid #94a3b8; border-radius: 5px; background: ButtonFace; color: ButtonText; cursor: pointer; }
+.icon-button { width: 32px; padding: 6px; }
+.icon-button img { width: 18px; height: 18px; }
+.compact-secondary { padding: 5px 9px; font-size: 13px; }
+.icon-button.delete { color: #b42318; }
+.icon-button.delete:hover, .icon-button.delete:focus-visible { color: #8f1912; border-color: #b42318; background: #fff5f4; }
+.icon-button:hover, .compact-secondary:hover { filter: brightness(.96); }
+.icon-button:active, .compact-secondary:active { transform: translateY(1px); }
+.icon-button:focus-visible, .compact-secondary:focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
 button { width: fit-content; background: #fff; border: 1px solid #94a3b8; border-radius: 5px; padding: 8px 12px; cursor: pointer; font: inherit; }
 button:disabled { cursor: not-allowed; opacity: .5; }
 #editor { display: grid; gap: 12px; padding: 14px; border: 1px solid #2563eb; border-radius: 7px; background: #eff6ff; }
 #editor label { display: grid; gap: 5px; font-weight: 600; }
 #editor select { padding: 7px; font: inherit; }
 #editor .remember { display: block; font-weight: 400; }
+.effective-scope-preview { display: grid; gap: 4px; padding: 9px 10px; border-left: 3px solid #64748b; background: #f1f5f9; font-size: 12px; color: #52606d; }
+.effective-scope-preview output { color: inherit; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; white-space: normal; }
+#editor-sync-status { font-size: 12px; }
 footer { justify-content: flex-end; padding: 12px 20px; border-top: 1px solid #cbd5e1; background: #eaf0f7; position: sticky; bottom: 0; }
 .footer-tools { display: flex; gap: 8px; margin-right: auto; }
 #save { background: #2563eb; border-color: #1d4ed8; color: white; }
@@ -32,5 +47,6 @@ footer { justify-content: flex-end; padding: 12px 20px; border-top: 1px solid #c
 /* Use CSS system colors so auxiliary dialogs follow the active browser theme. */
 :root { color-scheme: light dark; }
 body, li, #editor, footer { color: CanvasText; background: Canvas; }
+.effective-scope-preview { background: color-mix(in srgb, Canvas 88%, Highlight); }
 button { color: ButtonText; background: ButtonFace; border-color: ButtonBorder; }
 #save { color: HighlightText; background: Highlight; border-color: Highlight; }

@@ -2,12 +2,12 @@
  * Defines SmartWindowSize defaults and validates persisted configuration data.
  * Storage helpers use this module to create and normalize the local schema.
  */
-import { scopeForUrl } from "./rule-matcher.js";
+import { canonicalizeScopeValue } from "./rule-matcher.js";
 
 /**
  * A canonical target matched against a tab URL.
  * @typedef {object} RuleScope
- * @property {"domain_tree"|"domain_exact"|"url_subpaths"|"url_any_parameters"|"url_exact_parameters"|"url_non_exact_parameters"} type URL coverage type.
+ * @property {"domain_tree"|"domain_www_pair"|"domain_exact"|"url_subpaths"|"url_any_parameters"|"url_exact_parameters"|"url_non_exact_parameters"} type URL coverage type.
  * @property {string} value Canonical URL-derived value stored for the scope.
  */
 
@@ -64,7 +64,7 @@ import { scopeForUrl } from "./rule-matcher.js";
  */
 
 /** Schema version used to identify the normalized storage format. @type {number} */
-export const CONFIG_SCHEMA_VERSION = 6;
+export const CONFIG_SCHEMA_VERSION = 7;
 
 
 /** Immutable default values copied into every new configuration. @type {Readonly<GlobalSettings>} */
@@ -76,13 +76,17 @@ export const DEFAULT_GLOBAL = Object.freeze({
   ruleRetentionDays: 180,
   rememberMonitor: false,
 
+  syncRules: false,
+
+  diagnosticLevel: "warnings-errors",
+
   debug: false
 });
 
 
 /** Creates a new configuration using every current default value. @returns {object} Default configuration. */
 export function createDefaultConfig() {
-  return { schemaVersion: CONFIG_SCHEMA_VERSION, global: { ...DEFAULT_GLOBAL }, rules: [] };
+  return { schemaVersion: CONFIG_SCHEMA_VERSION, global: { ...DEFAULT_GLOBAL }, sync: { clientId: null, tombstones: {} }, rules: [] };
 }
 
 
@@ -113,6 +117,8 @@ export function normalizeConfig(input) {
   global.useDefaultSize = Boolean(global.useDefaultSize);
   global.ruleRetentionDays = [-1, 90, 180, 365, 730].includes(global.ruleRetentionDays) ? global.ruleRetentionDays : DEFAULT_GLOBAL.ruleRetentionDays;
   global.rememberMonitor = Boolean(global.rememberMonitor);
+  global.syncRules = Boolean(global.syncRules);
+  global.diagnosticLevel = ["errors", "warnings-errors", "verbose"].includes(global.diagnosticLevel) ? global.diagnosticLevel : DEFAULT_GLOBAL.diagnosticLevel;
   global.debug = Boolean(global.debug);
 
   const unique = new Map();
@@ -121,7 +127,10 @@ export function normalizeConfig(input) {
     const normalized = normalizeRule(rule);
     unique.set(`${normalized.scope.type}:${normalized.scope.value}`, normalized);
   }
-  return { schemaVersion: CONFIG_SCHEMA_VERSION, global, rules: [...unique.values()] };
+  const sync = source.sync && typeof source.sync === "object" ? source.sync : {};
+  const tombstones = Object.fromEntries(Object.entries(sync.tombstones && typeof sync.tombstones === "object" ? sync.tombstones : {}).filter(([, value]) =>
+    value && typeof value === "object" && typeof value.id === "string" && Number.isInteger(value.revision) && value.revision > 0));
+  return { schemaVersion: CONFIG_SCHEMA_VERSION, global, sync: { clientId: typeof sync.clientId === "string" && sync.clientId ? sync.clientId : null, tombstones }, rules: [...unique.values()] };
 }
 
 
@@ -136,14 +145,9 @@ export function isValidRule(rule) {
 
 
 /** Canonicalizes stored URL coverage without inferring a registrable domain. @param {object} scope Stored scope. @returns {string|null} Valid canonical coverage. */
-function normalizedScopeValue(scope) {
+export function normalizedScopeValue(scope) {
   const type = normalizeScopeType(scope.type);
-  if (!type || typeof scope.value !== "string") return null;
-  if (type.startsWith("domain_")) {
-    const hostname = scopeForUrl(`https://${scope.value}/`, type);
-    return hostname === scope.value.toLowerCase() ? hostname : null;
-  }
-  return scopeForUrl(scope.value, type);
+  return type ? canonicalizeScopeValue(type, scope.value) : null;
 }
 
 
@@ -164,7 +168,22 @@ export function normalizeRule(rule) {
       enabled: Boolean(rule.display?.enabled) && typeof rule.display?.id === "string" && rule.display.id.length > 0,
       id: typeof rule.display?.id === "string" ? rule.display.id : null
     },
+    ...(normalizeRuleSync(rule.sync) ? { sync: normalizeRuleSync(rule.sync) } : {}),
     lastUpdatedAt: typeof rule.lastUpdatedAt === "string" && !Number.isNaN(Date.parse(rule.lastUpdatedAt)) ? rule.lastUpdatedAt : new Date().toISOString()
+  };
+}
+
+
+/** Normalizes local-only reconciliation metadata without trusting cloud data. @param {unknown} value Candidate metadata. @returns {object|null} Valid metadata or null for legacy migration. */
+function normalizeRuleSync(value) {
+  if (!value || typeof value !== "object" || typeof value.id !== "string" || !value.id) return null;
+  return {
+    id: value.id,
+    revision: Number.isInteger(value.revision) && value.revision > 0 ? value.revision : 1,
+    modifiedAt: typeof value.modifiedAt === "string" && !Number.isNaN(Date.parse(value.modifiedAt)) ? value.modifiedAt : null,
+    modifiedByClientId: typeof value.modifiedByClientId === "string" && value.modifiedByClientId ? value.modifiedByClientId : null,
+    origin: value.origin === "user" ? "user" : "legacy",
+    conflict: value.conflict && typeof value.conflict === "object" ? structuredClone(value.conflict) : null
   };
 }
 
@@ -174,7 +193,7 @@ const LEGACY_SCOPE_TYPES = Object.freeze({ domain: "domain_tree", subdomain: "do
 
 
 /** Current coverage type names accepted by persisted configuration. @type {ReadonlySet<string>} */
-const SCOPE_TYPES = new Set(["domain_tree", "domain_exact", "url_subpaths", "url_any_parameters", "url_exact_parameters", "url_non_exact_parameters"]);
+const SCOPE_TYPES = new Set(["domain_tree", "domain_www_pair", "domain_exact", "url_subpaths", "url_any_parameters", "url_exact_parameters", "url_non_exact_parameters"]);
 
 
 /** Converts a legacy or current coverage type into the current vocabulary. @param {unknown} type Candidate coverage type. @returns {string|null} Current type or null when unsupported. */
@@ -194,9 +213,10 @@ export function createRuleId() {
 export function validateConfigImport(input) {
   if (!input || typeof input !== "object" || !input.global || typeof input.global !== "object" || Array.isArray(input.global) || !Array.isArray(input.rules) ||
       !Number.isInteger(input.schemaVersion) || input.schemaVersion < 1 || input.schemaVersion > CONFIG_SCHEMA_VERSION) throw new Error("Invalid or unsupported configuration backup.");
-  for (const key of ["enabled", "useDefaultSize", "rememberMonitor", "debug"]) {
+  for (const key of ["enabled", "useDefaultSize", "rememberMonitor", "debug", "syncRules"]) {
     if (key in input.global && typeof input.global[key] !== "boolean") throw new Error(`Invalid setting: ${key}.`);
   }
+  if ("diagnosticLevel" in input.global && !["errors", "warnings-errors", "verbose"].includes(input.global.diagnosticLevel)) throw new Error("Invalid diagnostic detail level.");
   for (const key of ["automaticWidth", "automaticHeight"]) {
     if (key in input.global && (!Number.isInteger(input.global[key]) || input.global[key] < (key === "automaticWidth" ? 320 : 240))) throw new Error(`Invalid setting: ${key}.`);
   }
@@ -207,7 +227,7 @@ export function validateConfigImport(input) {
     if (!isValidRule(rule) || typeof rule.id !== "string" || !rule.id || ids.has(rule.id)) throw new Error("Invalid or duplicate rule identifier.");
     const type = normalizeScopeType(rule.scope.type);
     const value = rule.scope.value;
-    const canonical = scopeForUrl(type.startsWith("domain_") ? `https://${value}/` : value, type);
+    const canonical = canonicalizeScopeValue(type, value);
     const key = `${type}:${value}`;
     if (canonical !== value || scopes.has(key)) throw new Error("Invalid or duplicate rule coverage.");
     if (typeof rule.enabled !== "boolean" || typeof rule.position?.enabled !== "boolean" || typeof rule.display?.enabled !== "boolean") throw new Error("Invalid rule switches.");

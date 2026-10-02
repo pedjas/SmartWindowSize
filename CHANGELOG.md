@@ -2,8 +2,48 @@
 
 ## Unreleased
 
+## 1.1.0 - 2026-10-02
+
+### Added
+
+- Add a Configuration-style Active rule popup section with a human-readable
+  rule label, canonical scope value, and optional remembered geometry rows.
+- Centralize user-facing rule-type labels so popup, Configuration, and the
+  Set rules editor cannot diverge on supported scopes.
+- Modernize shared UI controls, Diagnostics Log/Environment sub-tabs, and local
+  Material action icons while simplifying the Manual resize dialog.
+- Show the locally remembered monitor identifier in rule details and adopt
+  locally bundled Material icons for compact rule utility actions.
+- Add optional browser-native Rules Sync with a 128-bit deterministic identity,
+  visible effective scope, local per-device geometry, and legacy migration.
+- Show the local sync client, richer rule details, and clearer effective-scope guidance.
+- Add a domain scope covering only the base hostname and its www variant, plus a ready-to-edit default scope for new rules.
+- Add an enabled-state control to the site-rule editor and make the matching
+  effective scope visible in its rule list.
+
+### Changed
+
+- Use a recognizable local Material trash-can icon with compact danger treatment
+  for destructive Delete actions.
+- Keep popup Edit and Delete controls equal-sized and top-aligned while rule
+  details expand, with accessible labels and action tooltips.
+- Establish compact secondary and icon-button styles without reducing primary
+  Save, Add rule, Apply, or Close actions.
+- Show the complete local client ID with a Copy action, move Refresh from cloud
+  into the rule action row, and use readable sync-origin labels.
+- Add a Diagnostics detail setting (errors, warnings and errors, or verbose);
+  static environment and sync data stays outside the event log.
+- Document all seven scope priorities, including the www-pair scope, in the
+  shipped README, Configuration help, specification, and manual smoke tests.
+
 ### Fixed
 
+- Restore a matching rule's remembered absolute window position during normal
+  active-tab and navigation application, not only for newly created windows.
+- Verify remembered-monitor restoration uses the selected display before
+  absolute geometry is constrained, with safe missing-display fallback.
+- Make unavailable Set rules popup actions visibly disabled without changing
+  page eligibility.
 - Treat tabs closed during asynchronous lifecycle work as expected stale
   resources, preventing browser error-log spam while retaining unexpected
   browser failures in Diagnostics.

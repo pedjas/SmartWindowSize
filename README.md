@@ -28,6 +28,33 @@ Sizes are not remembered automatically by default.
 - Maximized and fullscreen windows are exempt from automatic resizing and
   saving. Rules are reconsidered when the window returns to normal.
 
+## Rules Sync
+
+**Sync rules between browsers** is optional and off by default. When enabled,
+SmartWindowSize uses the browser account's built-in extension sync service; it
+does not run a server or require a SmartWindowSize account. Rule scopes and the
+Remember position/monitor choices are shared. Enabled state, actual window
+size, position, monitor, diagnostics, and runtime state stay on each computer.
+
+Cloud dimensions are only a seed for a browser that receives a rule for the
+first time. Use **Set current size as synced default** from the toolbar
+context menu on a page with an applicable rule to update that seed.
+**Refresh from cloud** is available in a rule's Sync details without replacing
+this computer's geometry. Rules show an **Effective scope** so you can see the
+exact matching value. Existing installations migrate automatically; identical
+older rules receive the same deterministic identity.
+
+When creating or editing a rule in **Set rules for this site**, the dialog
+shows a live **Effective scope** preview before anything is saved.
+
+Effective scope shows which part of addresses this rule will actually apply to.
+For “This domain and its subdomains”, `www.example.com` becomes `example.com`
+because the rule covers the base domain, `www`, and other subdomains. “Domain
+with and without www” covers only the base hostname and its `www` form, while
+“Exact hostname” keeps `www.example.com` exact. Path and parameter rules show only
+the relevant path and parameters, in a consistent order, so you can check the
+result before saving.
+
 ## Rule scopes
 
 A site means the URLs covered by a rule. All examples below use fictional
@@ -36,7 +63,8 @@ hostnames under `.example`.
 | Scope shown in the extension | Coverage and example |
 | --- | --- |
 | This domain and its subdomains | A rule for `https://library.silverpine.example/books` covers every path on `library.silverpine.example` and its descendants, such as `catalog.library.silverpine.example`, but not sibling hostnames. |
-| This domain only | Covers the exact hostname `library.silverpine.example` and all its paths, but not its subdomains. |
+| Domain with and without www | Covers `library.silverpine.example` and `www.library.silverpine.example`, but not other subdomains. |
+| Exact hostname | Covers the exact hostname `library.silverpine.example` and all its paths, but not `www.library.silverpine.example` or other subdomains. |
 | This URL and its subpaths | `https://library.silverpine.example/guides` covers that path and `/guides/start`, but not `/guides-extra`. Query parameters are ignored. |
 | This URL — any parameters | Covers the same origin and path, such as `https://library.silverpine.example/search`, with any query parameters or none. |
 | This URL — exact query parameters | `https://library.silverpine.example/search?q=maps&type=atlas` requires the same parameters and values, in any order. Extra or missing parameters do not match. |
@@ -48,8 +76,9 @@ When rules overlap, the priority from highest to lowest is:
 2. This URL — non-exact query parameters
 3. This URL — any parameters
 4. This URL and its subpaths
-5. This domain only
-6. This domain and its subdomains
+5. Exact hostname
+6. Domain with and without www
+7. This domain and its subdomains
 
 A more specific rule does not delete broader rules. Domain rules start at the
 current complete hostname; the extension does not infer a registrable domain
@@ -94,9 +123,8 @@ the conflict check on Save remains an additional safeguard.
 Save refreshes the dimensions of added or edited rules from the source window;
 unchanged remaining rules keep their saved dimensions.
 
-New rules start at **Select rule scope…** and require an explicit scope choice.
-An incomplete scope selection blocks adding the rule and saving the dialog;
-cancel the inner form to abandon it. Edit starts with the rule's existing scope.
+New rules start with **This domain and its subdomains** selected, ready to edit.
+Edit starts with the rule's existing scope.
 There is no global Default rule coverage setting.
 
 Rules can be created for HTTP and HTTPS websites, not internal browser pages.
@@ -163,9 +191,12 @@ About opens a single dialog containing the name, version, purpose, and OK button
 Configuration has three tabs:
 
 - **Configuration**: global enable switch, optional automatic window size, rule
-  retention, and JSON backup/import/reset.
+  retention, Diagnostics detail, and JSON backup/import/reset. It also shows
+  the complete local sync client ID with a Copy action.
 - **Rules**: saved rules with scope, value, size, Remember position, position as
-  `x,y`, status, last update, and Delete. An empty list says **No rules defined**.
+  `x,y`, enabled state, effective scope, sync status, last update, and actions.
+  **Refresh from cloud** stays in the action row and retains local geometry.
+  An empty list says **No rules defined**.
   **Rule scopes description** links to the explanations below the table.
   Editing from this general list is deferred; use the site dialog to edit.
 - **Diagnostics**: session-local errors with copy and clear actions. The tab
@@ -181,8 +212,10 @@ Both **Configuration** and **About SmartWindowSize** provide **Open local
 README**. It opens one internal browser tab that displays the versioned
 `readme.txt` shipped with the extension.
 
-Rule retention offers 90, 180, 365, 730 days, or **Never**. Cleanup uses the
-last update timestamp, not a claim that the site was last visited on that date.
+Rule retention offers 90, 180, 365, 730 days, or **Never**. The Diagnostics
+detail selector immediately follows it and offers Errors only, Warnings and
+errors, or Verbose. Cleanup uses the last update timestamp, not a claim that
+the site was last visited on that date.
 
 Disabling the extension globally stops automatic resizing and saving and
 disables window-changing actions. The toolbar icon becomes gray. When enabled,
