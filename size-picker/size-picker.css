@@ -9,6 +9,7 @@ input, select { box-sizing: border-box; min-width: 0; min-height: 34px; padding:
 input[type=checkbox] { width: 16px; height: 16px; min-height: 0; accent-color: Highlight; }
 input:focus-visible, select:focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
 button { cursor: pointer; padding: 8px 10px; font: inherit; }
+.compact-secondary { margin-top: 8px; padding: 5px 9px; font-size: 13px; }
 footer { display: flex; gap: 8px; align-items: center; justify-content: flex-end; padding: 12px 20px; border-top: 1px solid #cbd5e1; background: #eaf0f7; }
 #bring-to-front { margin-right: auto; }
 .error { min-height: 1.25em; color: #b42318; margin: 8px 0 0; }

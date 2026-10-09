@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 1.1.21 - 2026-10-09
+
+- Add a Manual resize action that selects the current target-window size
+  without applying it, matches presets or Custom through the normal selection
+  path, and disables itself whenever the displayed dimensions already match.
+
 ## 1.1.19 - 2026-10-09
 
 - Refine Rules-card scanning with a prominent site/scope value, compact type

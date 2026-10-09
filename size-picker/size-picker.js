@@ -40,12 +40,20 @@ const errorElement = document.querySelector("#error");
 installClientErrors(errorElement);
 
 
+/** Secondary action that reloads and selects the target window's current dimensions. @type {HTMLButtonElement} */
+const useCurrentSizeButton = document.querySelector("#use-current-size");
+
+
 /** Text element presenting current minimum and maximum dimensions. @type {HTMLElement} */
 const limitsElement = document.querySelector("#limits");
 
 
 /** Current display-dependent limits returned by the service worker. @type {{width: number, height: number}|null} */
 let maximum = null;
+
+
+/** Most recently read actual target-window dimensions used to determine whether the secondary action would change the dialog. @type {{width: number, height: number}|null} */
+let currentWindowSize = null;
 
 
 /**
@@ -58,6 +66,49 @@ let maximum = null;
 function isAllowedSize(width, height) {
   return Number.isInteger(width) && Number.isInteger(height) && width >= 320 && height >= 240 &&
     maximum !== null && width <= maximum.width && height <= maximum.height;
+}
+
+
+/** Updates the secondary action with the dimensions it will select. @param {{width: number, height: number}} current Current target-window outer dimensions. @returns {void} */
+function showCurrentSizeAction(current) {
+  const label = `Use current window size (${current.width} × ${current.height})`;
+  useCurrentSizeButton.textContent = label;
+  useCurrentSizeButton.title = label;
+}
+
+
+/** Enables the current-size action only when the dialog represents dimensions different from the last actual target-window size. @returns {void} */
+function synchronizeCurrentSizeAction() {
+  const width = Number(widthInput.value);
+  const height = Number(heightInput.value);
+  useCurrentSizeButton.disabled = currentWindowSize === null ||
+    (width === currentWindowSize.width && height === currentWindowSize.height);
+}
+
+
+/** Stores newly read actual target-window dimensions and refreshes the secondary action presentation. @param {{width: number, height: number}} current Actual target-window outer dimensions. @returns {void} */
+function setCurrentWindowSize(current) {
+  currentWindowSize = { width: current.width, height: current.height };
+  showCurrentSizeAction(currentWindowSize);
+  synchronizeCurrentSizeAction();
+}
+
+
+/** Applies the service-worker-provided manual limits to the custom inputs. @param {{width: number, height: number}} nextMaximum Current target-display limits. @returns {void} */
+function setMaximum(nextMaximum) {
+  maximum = nextMaximum;
+  widthInput.min = "320";
+  heightInput.min = "240";
+  widthInput.max = String(maximum.width);
+  heightInput.max = String(maximum.height);
+}
+
+
+/** Reads the target window's current outer dimensions and manual-size limits through the existing service-worker request. @returns {Promise<{current: {width: number, height: number}, maximum: {width: number, height: number}}>} Valid current size and limits. */
+async function readCurrentWindowSize() {
+  const response = await request({ type: "get-window-size-limits", windowId: targetWindowId });
+  if (response?.error || !response?.current || !response?.maximum) throw new Error(response?.error ?? "Unable to read window limits.");
+  return response;
 }
 
 
@@ -101,6 +152,7 @@ function renderPresets(selectedValue = presetInput.value || "custom") {
   presetInput.value = Array.from(presetInput.options).some((option) => option.value === previousValue && !option.disabled) ? previousValue : Array.from(presetInput.options).find((option) => !option.disabled)?.value ?? "custom";
   synchronizePresetSelection();
   updateOrientationAvailability();
+  synchronizeCurrentSizeAction();
 }
 
 
@@ -112,7 +164,7 @@ function updateOrientationAvailability() {
 }
 
 
-/** Selects the matching preset or Custom from the current target-window dimensions. @param {{width: number, height: number}} current Current target-window outer dimensions. @returns {void} Updates controls before the first render. */
+/** Selects the matching preset or Custom from supplied dimensions. @param {{width: number, height: number}} current Candidate target-window outer dimensions. @returns {void} Updates the selection and custom fields. */
 function selectCurrentSize(current) {
   const horizontalIndex = findHorizontalPresetIndex(current.width, current.height);
   const verticalIndex = findHorizontalPresetIndex(current.height, current.width);
@@ -136,14 +188,10 @@ function selectCurrentSize(current) {
 /** Loads display limits and selects the actual target-window size and orientation. @returns {Promise<void>} Completes after the selector is ready. */
 async function initialize() {
   if (!Number.isInteger(targetWindowId) || targetWindowId < 0) throw new Error("Missing target window identifier.");
-  const response = await request({ type: "get-window-size-limits", windowId: targetWindowId });
-  if (response?.error || !response?.maximum) throw new Error(response?.error ?? "Unable to read window limits.");
-  maximum = response.maximum;
-  widthInput.min = "320";
-  heightInput.min = "240";
-  widthInput.max = String(maximum.width);
-  heightInput.max = String(maximum.height);
+  const response = await readCurrentWindowSize();
+  setMaximum(response.maximum);
   selectCurrentSize(response.current);
+  setCurrentWindowSize(response.current);
 }
 
 
@@ -156,12 +204,23 @@ verticalInput.addEventListener("change", () => {
 });
 
 
-/** Revalidates Custom orientation after either dimension is edited. */
-for (const input of [widthInput, heightInput]) input.addEventListener("input", updateOrientationAvailability);
+/** Routes manual custom dimension entry through the same preset-or-Custom selection logic as the current-size action. */
+for (const input of [widthInput, heightInput]) input.addEventListener("input", () => selectCurrentSize({ width: Number(widthInput.value), height: Number(heightInput.value) }));
 
 
 /** Applies the current dropdown selection to the visible dimensions. */
 presetInput.addEventListener("change", renderPresets);
+
+
+/** Reloads actual target-window dimensions and selects them without applying a resize. */
+useCurrentSizeButton.addEventListener("click", async () => {
+  await runClientAction("Use current window size", async () => {
+    const response = await readCurrentWindowSize();
+    setMaximum(response.maximum);
+    setCurrentWindowSize(response.current);
+    selectCurrentSize(response.current);
+  });
+});
 
 
 /** Focuses the browser window whose dimensions this dialog controls. */
