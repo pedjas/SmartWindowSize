@@ -5,6 +5,7 @@
 import { createDefaultConfig, validateConfigImport } from "./config.js";
 import { matchingRulesForUrl } from "./rule-resolver.js";
 import { ruleMatchesUrl, toUrl } from "./rule-matcher.js";
+import { nextSemanticRevision } from "./rule-sync.js";
 
 
 /** Compares JSON data while ignoring object-key and rule-list order. @param {unknown} value JSON value. @returns {string} Stable comparison string. */
@@ -34,7 +35,7 @@ export function applyConfigurationAction(config, message) {
     requireUnchanged(current, message.base);
     const syncId = current.sync?.id;
     const tombstones = { ...(config.sync?.tombstones ?? {}) };
-    if (syncId) tombstones[syncId] = { id: syncId, revision: current.sync.revision + 1, modifiedAt: new Date().toISOString(), modifiedByClientId: config.sync.clientId, deleted: true };
+    if (syncId) tombstones[syncId] = { id: syncId, revision: nextSemanticRevision(current.sync.revision), modifiedAt: new Date().toISOString(), modifiedByClientId: config.sync.clientId, deleted: true };
     return { ...config, sync: { ...config.sync, tombstones }, rules: config.rules.filter((rule) => rule.id !== message.ruleId) };
   }
   if (message.type === "set-rule-enabled") {
@@ -78,13 +79,19 @@ export function applySiteRuleEdits(config, url, message) {
   for (const [id, before] of beforeById) {
     const after = afterById.get(id);
     if (!after || before.scope.type !== after.scope.type || before.scope.value !== after.scope.value) {
-      if (before.sync?.id) tombstones[before.sync.id] = { id: before.sync.id, revision: before.sync.revision + 1, modifiedAt: new Date().toISOString(), modifiedByClientId: candidate.sync.clientId, deleted: true };
+      if (before.sync?.id) tombstones[before.sync.id] = { id: before.sync.id, revision: nextSemanticRevision(before.sync.revision), modifiedAt: new Date().toISOString(), modifiedByClientId: candidate.sync.clientId, deleted: true };
       if (after) delete after.sync;
       continue;
     }
     if (before.sync && (before.position.enabled !== after.position.enabled || before.display.enabled !== after.display.enabled)) {
-      after.sync = { ...before.sync, revision: before.sync.revision + 1, modifiedAt: new Date().toISOString(), modifiedByClientId: candidate.sync.clientId, origin: "user", conflict: null };
+      after.sync = { ...before.sync, revision: nextSemanticRevision(before.sync.revision), modifiedAt: new Date().toISOString(), modifiedByClientId: candidate.sync.clientId, conflict: null };
     }
+  }
+  // A new Add continues deleted identity history so ordinary revision-first reconciliation can accept it remotely.
+  for (const rule of candidate.rules) if (!beforeById.has(rule.id) && rule.sync?.id) {
+    const tombstone = tombstones[rule.sync.id];
+    if (tombstone) rule.sync = { ...rule.sync, revision: nextSemanticRevision(tombstone.revision, message.knownCloudRevisions?.[rule.sync.id]), modifiedAt: new Date().toISOString(), modifiedByClientId: candidate.sync.clientId, origin: "user", conflict: null };
+    delete tombstones[rule.sync.id];
   }
   return { ...candidate, sync: { ...candidate.sync, tombstones } };
 }

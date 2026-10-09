@@ -6,7 +6,8 @@ import { APP_VERSION } from "../core/app-version.js";
 import { SCOPE_PRIORITY } from "../core/rule-matcher.js";
 import { matchingRulesForUrl, resolveRule } from "../core/rule-resolver.js";
 import { request, installClientErrors, runClientAction, showClientError } from "../core/client.js";
-import { canonicalMatchKey, canonicalMatchKeyForUrl } from "../core/rule-sync.js";
+import { formatClientIdForDisplay } from "../core/client-id-presentation.js";
+import { canonicalMatchKey, canonicalMatchKeyForUrl, findActiveRuleByCanonicalIdentity } from "../core/rule-sync.js";
 import { RULE_TYPE_LABELS } from "../core/rule-types.js";
 
 
@@ -156,7 +157,7 @@ function render() {
     const metadata = document.createElement("span");
     metadata.className = "details";
     const modified = rule.sync?.modifiedAt && !Number.isNaN(Date.parse(rule.sync.modifiedAt)) ? new Date(rule.sync.modifiedAt).toLocaleString() : "Legacy migration (unordered)";
-    metadata.textContent = `Effective scope: ${canonicalMatchKey(rule.scope) ?? "—"}\nRemembered monitor: ${rememberedMonitorValue(rule)}\nSync Rule ID: ${rule.sync?.id ?? "—"}\nRevision: ${rule.sync?.revision ?? "—"}\nModified: ${modified}\nModified by: ${rule.sync?.modifiedByClientId ?? "—"}\nOrigin: ${rule.sync?.origin === "legacy" ? "Migrated from previous version" : "Created locally"}\nSync: ${rule.sync?.conflict ? "Conflict" : state.syncEnabled ? "Sync enabled" : "Sync disabled"}`;
+    metadata.textContent = `Effective scope: ${canonicalMatchKey(rule.scope) ?? "—"}\nRemembered monitor: ${rememberedMonitorValue(rule)}\nSync Rule ID: ${rule.sync?.id ?? "—"}\nRevision: ${rule.sync?.revision ?? "—"}\nModified: ${modified}\nModified by: ${formatClientIdForDisplay(rule.sync?.modifiedByClientId, state.clientId)}\nOrigin: ${rule.sync?.origin === "legacy" ? "Migrated from previous version" : "Created locally"}\nSync: ${rule.sync?.conflict ? "Conflict" : state.syncEnabled ? "Sync enabled" : "Sync disabled"}`;
     inspect.append(summary, metadata);
     details.append(inspect);
     const actions = document.createElement("div");
@@ -317,7 +318,8 @@ editor.addEventListener("submit", async (event) => {
     const existing = editingRuleId ? state.rules.find((rule) => rule.id === editingRuleId) ?? null : null;
     const next = await ruleFromEditor(existing);
     if (!state.writable) return;
-    state.rules = state.rules.filter((rule) => rule.id !== next.id && (rule.scope.type !== next.scope.type || rule.scope.value !== next.scope.value));
+    if (findActiveRuleByCanonicalIdentity(state.rules, next.scope, next.id)) throw new Error("An active rule for this effective scope already exists.");
+    state.rules = state.rules.filter((rule) => rule.id !== next.id);
     state.rules.push(next);
     closeEditor();
     render();

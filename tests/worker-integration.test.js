@@ -30,14 +30,16 @@ function rule(type = "domain_tree", value = "alpha.example", width = 800) {
 }
 
 
-/** Creates an isolated browser fixture with real background business logic. @param {object[]} rules Initial rules. @returns {Promise<object>} Mutable browser controls and request API. */
-async function browserFixture(rules = [], useFirefoxWindowEvents = false, firefoxHasBoundsChanged = true) {
+/** Creates an isolated browser fixture with real background business logic. @param {object[]} rules Initial rules. @param {boolean} useFirefoxWindowEvents Whether to expose Firefox events. @param {boolean} firefoxHasBoundsChanged Whether Firefox has bounds events. @param {object|undefined} sharedCloud Optional cloud shared only by an explicit multi-client scenario. @param {string|undefined} clientId Persistent client identity for this fixture. @param {boolean} syncEnabled Whether sync is enabled before service-worker initialization. @returns {Promise<object>} Mutable browser controls and request API. */
+async function browserFixture(rules = [], useFirefoxWindowEvents = false, firefoxHasBoundsChanged = true, sharedCloud = undefined, clientId = undefined, syncEnabled = false) {
   const config = configModule.createDefaultConfig();
   config.rules = rules;
+  if (clientId) config.sync.clientId = clientId;
+  config.global.syncRules = syncEnabled;
   config.global.ruleRetentionDays = -1;
   const local = { smartWindowSizeConfig: config };
   const ephemeral = {};
-  const cloud = {};
+  const cloud = sharedCloud ?? {};
   const listeners = {};
   const updates = [];
   const iconUpdates = [];
@@ -68,7 +70,7 @@ async function browserFixture(rules = [], useFirefoxWindowEvents = false, firefo
   /** Creates one asynchronous browser storage area. @param {object} data Storage contents. @param {string} area Storage area name. @returns {object} API facade. */
   function area(data, area) {
     return {
-      async get(key) { return { [key]: structuredClone(data[key]) }; },
+      async get(key) { return key === null ? structuredClone(data) : { [key]: structuredClone(data[key]) }; },
       async set(values) {
         const changes = {};
         for (const [key, value] of Object.entries(values)) {
@@ -81,7 +83,7 @@ async function browserFixture(rules = [], useFirefoxWindowEvents = false, firefo
     };
   }
 
-  globalThis.chrome = {
+  const chrome = {
     storage: { local: area(local, "local"), session: area(ephemeral, "session"), sync: area(cloud, "sync"), onChanged: event("storage") },
     runtime: { getURL: (path) => `chrome-extension://test/${path}`, sendMessage: async (message) => { messages.push(message); }, openOptionsPage: async () => { optionsOpened += 1; },
       onMessage: event("message"), onInstalled: event("installed"), onStartup: event("startup") },
@@ -146,15 +148,16 @@ async function browserFixture(rules = [], useFirefoxWindowEvents = false, firefo
       onCreated: event("created"), onBoundsChanged: event("bounds"), onFocusChanged: event("focus"), onRemoved: event("removed")
     }
   };
+  globalThis.chrome = chrome;
   const source = (await readFile(new URL("../background/service-worker.js", import.meta.url), "utf8")).replace(/^import .*;\r?$/gm, "");
   const firefoxWindowEvents = useFirefoxWindowEvents ? {
-    onCreated: globalThis.chrome.windows.onCreated,
-    onFocusChanged: globalThis.chrome.windows.onFocusChanged,
-    onRemoved: globalThis.chrome.windows.onRemoved,
-    ...(firefoxHasBoundsChanged ? { onBoundsChanged: globalThis.chrome.windows.onBoundsChanged } : {})
+    onCreated: chrome.windows.onCreated,
+    onFocusChanged: chrome.windows.onFocusChanged,
+    onRemoved: chrome.windows.onRemoved,
+    ...(firefoxHasBoundsChanged ? { onBoundsChanged: chrome.windows.onBoundsChanged } : {})
   } : undefined;
   const bindings = { ...storage, ...resolver, ...updater, ...manager, ...icons, ...menus, ...configModule, ...actions, ...matcher, ...diagnostics, ...session, ...tabLifecycle, ...ruleSync, ...ruleSyncStore,
-    windowBoundsChanged, APP_VERSION: "test", chrome: globalThis.chrome, Date, URL, structuredClone,
+    windowBoundsChanged, APP_VERSION: "test", chrome, Date, URL, structuredClone,
     browser: firefoxWindowEvents ? { windows: firefoxWindowEvents } : undefined,
     setTimeout: (callback) => { const id = ++nextTimer; timers.set(id, callback); return id; }, clearTimeout: (id) => timers.delete(id) };
   let context = vm.createContext(bindings);
@@ -163,26 +166,61 @@ async function browserFixture(rules = [], useFirefoxWindowEvents = false, firefo
 
   /** Drains Promise-based browser work without firing deferred browser timers. @returns {Promise<void>} Completion. */
   async function settle() {
-    for (let i = 0; i < 12; i += 1) await new Promise((resolve) => setImmediate(resolve));
+    for (let i = 0; i < 48; i += 1) await new Promise((resolve) => setImmediate(resolve));
   }
+
+  /** Makes this fixture the active host-level browser backing imported production modules. @returns {void} Activates isolated fixture storage. */
+  function activate() { globalThis.chrome = chrome; }
 
   await settle();
   return { local, ephemeral, cloud, windows, tabs, updates, iconUpdates, messages, listeners, created: () => created, optionsOpened: () => optionsOpened,
     omitCreatedRuleDialogFromQuery: (value) => { omitCreatedRuleDialogFromQuery = value; },
     createdPopupStartsBlank: (value) => { createdPopupStartsBlank = value; },
     tabGetFailure: (error) => { tabGetFailure = error; },
-    restart: async () => { context = vm.createContext({ ...bindings }); vm.runInContext(source, context); await settle(); },
+    closeWindow: async (id) => { activate(); windows.delete(id); for (const [tabId, tab] of tabs) if (tab.windowId === id) tabs.delete(tabId); listeners.removed?.(id); await settle(); },
+    activate,
+    restart: async () => { activate(); context = vm.createContext({ ...bindings }); vm.runInContext(source, context); await settle(); },
     editor: async (tabId = 1) => {
+      activate();
       const dispatch = (...args) => vm.runInContext("dispatchRequest", context)(...args);
       await dispatch({ type: "open-rule-editor", tabId });
       const dialog = [...tabs.values()].find((tab) => tab.url?.startsWith(`chrome-extension://test/rule-delete/rule-delete.html?tabId=${tabId}&sourceWindowId=7&editorToken=`));
       const editorToken = new URL(dialog.url).searchParams.get("editorToken");
-      return { dialog, editorToken, dispatch: (message) => dispatch({ tabId, sourceWindowId: 7, editorToken, editorTabId: dialog.id, editorWindowId: dialog.windowId, ...message }, { tab: structuredClone(dialog) }) };
+      return { dialog, editorToken, dispatch: (message) => { activate(); return dispatch({ tabId, sourceWindowId: 7, editorToken, editorTabId: dialog.id, editorWindowId: dialog.windowId, ...message }, { tab: structuredClone(dialog) }); } };
     },
-    apply: (...args) => vm.runInContext("applyForTab", context)(...args), dispatch: (...args) => vm.runInContext("dispatchRequest", context)(...args),
-    flush: (id) => vm.runInContext("inWindow", context)(id, () => vm.runInContext("flushPendingBounds", context)(id)), settle,
-    runTimers: async () => { const callbacks = [...timers.values()]; timers.clear(); for (const callback of callbacks) callback(); await settle(); },
-    request: (message) => new Promise((resolve) => listeners.message(message, {}, resolve)) };
+    apply: (...args) => { activate(); return vm.runInContext("applyForTab", context)(...args); }, dispatch: (...args) => { activate(); return vm.runInContext("dispatchRequest", context)(...args); },
+    flush: (id) => { activate(); return vm.runInContext("inWindow", context)(id, () => vm.runInContext("flushPendingBounds", context)(id)); }, settle,
+    runTimers: async () => { activate(); const callbacks = [...timers.values()]; timers.clear(); for (const callback of callbacks) callback(); await settle(); },
+    request: (message) => { activate(); return new Promise((resolve) => listeners.message(message, {}, resolve)); } };
+}
+
+
+/** Creates two isolated service-worker clients that intentionally share only the simulated storage.sync cloud. @returns {Promise<{a: object, b: object, cloud: object, deliver: (target: object) => Promise<void>, settleAll: () => Promise<void>}>} Two clients and controlled cloud delivery. */
+async function twoClientFixture() {
+  const cloud = {};
+  const a = await browserFixture([], false, true, cloud, "client-a", true);
+  const b = await browserFixture([], false, true, cloud, "client-b", true);
+  /** Delivers the cloud snapshot to one client as a browser sync-area change. @param {object} target Receiving client. @returns {Promise<void>} Completion after its worker settles. */
+  async function deliver(target) {
+    target.activate();
+    const changes = Object.fromEntries(Object.entries(cloud).map(([key, value]) => [key, { oldValue: undefined, newValue: structuredClone(value) }]));
+    target.listeners.storage(changes, "sync");
+    await target.settle();
+  }
+  /** Fully drains each independently activated client before a later fixture can replace host-level module bindings. @returns {Promise<void>} Completion after both queues settle. */
+  async function settleAll() { a.activate(); await a.settle(); b.activate(); await b.settle(); }
+  return { a, b, cloud, deliver, settleAll };
+}
+
+
+/** Adds one domain rule through the real editor prepare/save production path. @param {object} client Worker fixture. @returns {Promise<object>} Newly persisted rule. */
+async function addDomainRule(client) {
+  const editor = await client.editor();
+  const initial = await editor.dispatch({ type: "get-rule-editor-state" });
+  const prepared = await editor.dispatch({ type: "prepare-site-rule", url: initial.url, scope: "domain_tree", rememberPosition: false, rememberMonitor: false });
+  await editor.dispatch({ type: "save-site-rules", url: initial.url, baseRules: initial.rules, rules: [...initial.rules, prepared.rule] });
+  await client.settle();
+  return client.local.smartWindowSizeConfig.rules[0];
 }
 
 
@@ -273,6 +311,180 @@ test("enabling Rules Sync publishes one compact record without local geometry", 
   assert.equal(browser.local.smartWindowSizeConfig.rules[0].width, before.width);
   assert.equal(browser.local.smartWindowSizeConfig.rules[0].sync.id, before.sync.id);
   assert.equal(browser.local.smartWindowSizeConfig.rules[0].sync.revision, before.sync.revision);
+});
+
+
+test("two independent clients create, import, and semantically edit one shared rule without replacing local lineage or geometry", async () => {
+  const { a, b, cloud, deliver, settleAll } = await twoClientFixture();
+  const created = await addDomainRule(a);
+  const key = ruleSyncStore.cloudRuleKey(created.sync.id);
+  assert.equal(cloud[key].status.revision, 1);
+  assert.equal(created.sync.origin, "user");
+  assert.equal(cloud[key].status.modifiedByClientId, "client-a");
+  await b.request({ type: "sync-rules-now" });
+  const imported = b.local.smartWindowSizeConfig.rules[0];
+  assert.equal(imported.sync.id, created.sync.id);
+  assert.equal(imported.sync.origin, "sync");
+  assert.equal(imported.sync.modifiedByClientId, "client-a");
+  assert.equal(b.local.smartWindowSizeConfig.rules.length, 1);
+  Object.assign(a.local.smartWindowSizeConfig.rules[0], { enabled: false, width: 901, height: 701, position: { enabled: true, x: 10, y: 20 }, display: { enabled: true, id: "left" } });
+  Object.assign(b.local.smartWindowSizeConfig.rules[0], { enabled: true, width: 811, height: 611, position: { enabled: false, x: 30, y: 40 }, display: { enabled: true, id: "right" } });
+  const editor = await b.editor();
+  const state = await editor.dispatch({ type: "get-rule-editor-state" });
+  const edited = { ...state.rules[0], position: { ...state.rules[0].position, enabled: true } };
+  await editor.dispatch({ type: "save-site-rules", url: state.url, baseRules: state.rules, rules: [edited] });
+  await b.settle();
+  assert.equal(cloud[key].status.revision, 2);
+  assert.equal(cloud[key].status.modifiedByClientId, "client-b");
+  assert.equal(b.local.smartWindowSizeConfig.rules[0].sync.origin, "sync");
+  await deliver(a);
+  const updatedA = a.local.smartWindowSizeConfig.rules[0];
+  assert.equal(updatedA.sync.revision, 2);
+  assert.equal(updatedA.sync.modifiedByClientId, "client-b");
+  assert.equal(updatedA.sync.origin, "user");
+  assert.deepEqual({ enabled: updatedA.enabled, width: updatedA.width, height: updatedA.height, position: updatedA.position, display: updatedA.display }, { enabled: false, width: 901, height: 701, position: { enabled: true, x: 10, y: 20 }, display: { enabled: true, id: "left" } });
+  assert.deepEqual({ enabled: cloud[key].definition.enabled, width: cloud[key].definition.width, position: cloud[key].definition.position, display: cloud[key].definition.display }, { enabled: undefined, width: undefined, position: undefined, display: undefined });
+  await settleAll();
+});
+
+
+test("two-client delete and explicit same-scope recreation keep one deterministic identity and clear both deletion indexes", async () => {
+  const { a, b, cloud, deliver, settleAll } = await twoClientFixture();
+  const created = await addDomainRule(a);
+  const id = created.sync.id;
+  const key = ruleSyncStore.cloudRuleKey(id);
+  await deliver(b);
+  const editor = await a.editor();
+  const state = await editor.dispatch({ type: "get-rule-editor-state" });
+  await editor.dispatch({ type: "save-site-rules", url: state.url, baseRules: state.rules, rules: [] });
+  await a.settle();
+  assert.equal(a.local.smartWindowSizeConfig.rules.length, 0);
+  assert.equal(a.local.smartWindowSizeConfig.sync.tombstones[id].deleted, true);
+  assert.equal(cloud[key].status.deleted, true);
+  await deliver(b);
+  assert.equal(b.local.smartWindowSizeConfig.rules.length, 0);
+  assert.equal(b.local.smartWindowSizeConfig.sync.tombstones[id].deleted, true);
+  await a.closeWindow(editor.dialog.windowId);
+  const recreated = await addDomainRule(a);
+  assert.equal(recreated.sync.id, id);
+  assert.equal(a.local.smartWindowSizeConfig.sync.tombstones[id], undefined);
+  assert.equal(cloud[key].status.deleted, false);
+  await deliver(b);
+  assert.equal(b.local.smartWindowSizeConfig.rules.length, 1);
+  assert.equal(b.local.smartWindowSizeConfig.rules[0].sync.id, id);
+  assert.equal(b.local.smartWindowSizeConfig.rules[0].sync.origin, "sync");
+  assert.equal(b.local.smartWindowSizeConfig.sync.tombstones[id], undefined);
+  assert.equal(cloud[key].status.deleted, false);
+  const repeatEditor = await a.editor();
+  const repeatState = await repeatEditor.dispatch({ type: "get-rule-editor-state" });
+  await repeatEditor.dispatch({ type: "save-site-rules", url: repeatState.url, baseRules: repeatState.rules, rules: [] });
+  await a.settle();
+  assert.equal(cloud[key].status.revision, 4);
+  assert.equal(cloud[key].status.deleted, true);
+  await deliver(b);
+  assert.equal(b.local.smartWindowSizeConfig.rules.length, 0);
+  await a.closeWindow(repeatEditor.dialog.windowId);
+  const finalRule = await addDomainRule(a);
+  assert.equal(finalRule.sync.id, id);
+  assert.equal(finalRule.sync.revision, 5);
+  await deliver(b);
+  assert.equal(b.local.smartWindowSizeConfig.rules.length, 1);
+  assert.equal(b.local.smartWindowSizeConfig.rules[0].sync.revision, 5);
+  assert.equal(b.local.smartWindowSizeConfig.rules.filter((rule) => rule.sync.id === id).length, 1);
+  await settleAll();
+});
+
+
+test("the real editor Add route still rejects a currently active canonical duplicate", async () => {
+  const browser = await browserFixture();
+  const created = await addDomainRule(browser);
+  const first = await browser.editor();
+  await browser.closeWindow(first.dialog.windowId);
+  const editor = await browser.editor();
+  const state = await editor.dispatch({ type: "get-rule-editor-state" });
+  await assert.rejects(editor.dispatch({ type: "prepare-site-rule", url: state.url, scope: "domain_tree", rememberPosition: false, rememberMonitor: false }), /active rule.*effective scope/i);
+  assert.equal(browser.local.smartWindowSizeConfig.rules.length, 1);
+  assert.equal(browser.local.smartWindowSizeConfig.rules[0].sync.id, created.sync.id);
+  await browser.closeWindow(editor.dialog.windowId);
+});
+
+
+test("startup reconciliation imports a missed cloud change into a newly initialized independent client", async () => {
+  const cloud = {};
+  const a = await browserFixture([], false, true, cloud, "client-a", true);
+  const created = await addDomainRule(a);
+  const b = await browserFixture([], false, true, cloud, "client-b", true);
+  assert.equal(b.local.smartWindowSizeConfig.rules.length, 1);
+  assert.equal(b.local.smartWindowSizeConfig.rules[0].sync.id, created.sync.id);
+  assert.equal(b.local.smartWindowSizeConfig.rules[0].sync.origin, "sync");
+  a.activate(); await a.settle(); b.activate(); await b.settle();
+});
+
+test("an authoritative remote tombstone removes the active rule and persists its local deletion index", async () => {
+  const browser = await browserFixture([rule()]);
+  const base = structuredClone(browser.local.smartWindowSizeConfig.global);
+  await browser.request({ type: "save-global-settings", base, global: { ...base, syncRules: true } });
+  await browser.settle();
+  const local = browser.local.smartWindowSizeConfig.rules[0];
+  const status = { revision: local.sync.revision + 1, modifiedAt: "2026-10-09T10:00:00.000Z", modifiedByClientId: "client-a", deleted: true };
+  const key = ruleSyncStore.cloudRuleKey(local.sync.id);
+  browser.cloud[key] = { status };
+  browser.listeners.storage({ [key]: { oldValue: null, newValue: structuredClone(browser.cloud[key]) } }, "sync");
+  await browser.settle();
+  assert.equal(browser.local.smartWindowSizeConfig.rules.length, 0);
+  assert.deepEqual(browser.local.smartWindowSizeConfig.sync.tombstones[local.sync.id], { id: local.sync.id, ...status });
+  assert.deepEqual(browser.cloud[key].status, status);
+});
+
+
+test("equal-revision active and tombstone states use the shared different-client timestamp fallback", async () => {
+  const browser = await browserFixture([rule()]);
+  const base = structuredClone(browser.local.smartWindowSizeConfig.global);
+  await browser.request({ type: "save-global-settings", base, global: { ...base, syncRules: true } });
+  await browser.settle();
+  const local = browser.local.smartWindowSizeConfig.rules[0];
+  const key = ruleSyncStore.cloudRuleKey(local.sync.id);
+  const newerCloudTime = new Date(Date.parse(local.sync.modifiedAt) + 60000).toISOString();
+  browser.cloud[key] = { status: { revision: local.sync.revision, modifiedAt: newerCloudTime, modifiedByClientId: "client-b", deleted: true } };
+  browser.listeners.storage({ [key]: { oldValue: null, newValue: structuredClone(browser.cloud[key]) } }, "sync");
+  await browser.settle();
+  assert.equal(browser.local.smartWindowSizeConfig.rules.length, 0);
+  assert.equal(browser.local.smartWindowSizeConfig.sync.tombstones[local.sync.id].modifiedByClientId, "client-b");
+});
+
+
+test("unresolved equal-revision active and tombstone states remain local conflicts", async () => {
+  const browser = await browserFixture([rule()]);
+  const base = structuredClone(browser.local.smartWindowSizeConfig.global);
+  await browser.request({ type: "save-global-settings", base, global: { ...base, syncRules: true } });
+  await browser.settle();
+  const local = browser.local.smartWindowSizeConfig.rules[0];
+  const key = ruleSyncStore.cloudRuleKey(local.sync.id);
+  browser.cloud[key] = { status: { revision: local.sync.revision, modifiedAt: "2026-10-09T10:05:00.000Z", modifiedByClientId: local.sync.modifiedByClientId, deleted: true } };
+  browser.listeners.storage({ [key]: { oldValue: null, newValue: structuredClone(browser.cloud[key]) } }, "sync");
+  await browser.settle();
+  assert.equal(browser.local.smartWindowSizeConfig.rules.length, 1);
+  assert.equal(browser.local.smartWindowSizeConfig.rules[0].sync.conflict.kind, "equal-revision-state-conflict");
+});
+
+
+test("a newer cloud active state recreates a locally tombstoned rule without republishing it", async () => {
+  const browser = await browserFixture([rule()]);
+  const base = structuredClone(browser.local.smartWindowSizeConfig.global);
+  await browser.request({ type: "save-global-settings", base, global: { ...base, syncRules: true } });
+  await browser.settle();
+  const local = browser.local.smartWindowSizeConfig.rules[0];
+  const key = ruleSyncStore.cloudRuleKey(local.sync.id);
+  browser.cloud[key] = { status: { revision: local.sync.revision + 1, modifiedAt: "2026-10-09T10:05:00.000Z", modifiedByClientId: "client-a", deleted: true } };
+  browser.listeners.storage({ [key]: { oldValue: null, newValue: structuredClone(browser.cloud[key]) } }, "sync");
+  await browser.settle();
+  browser.cloud[key] = { status: { revision: local.sync.revision + 2, modifiedAt: "2026-10-09T10:10:00.000Z", modifiedByClientId: "client-b", origin: "user", deleted: false }, definition: { scope: structuredClone(local.scope), rememberPosition: false, rememberMonitor: false, seedWidth: 999, seedHeight: 777 } };
+  browser.listeners.storage({ [key]: { oldValue: null, newValue: structuredClone(browser.cloud[key]) } }, "sync");
+  await browser.settle();
+  assert.equal(browser.local.smartWindowSizeConfig.rules.length, 1);
+  assert.equal(browser.local.smartWindowSizeConfig.rules[0].sync.origin, "sync");
+  assert.equal(browser.local.smartWindowSizeConfig.rules[0].width, 999);
+  assert.deepEqual(browser.cloud[key].definition.seedWidth, 999);
 });
 
 

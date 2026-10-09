@@ -12,6 +12,14 @@ export function canonicalMatchKey(scope) {
 }
 
 
+/** Finds another active local rule with the same canonical matcher identity. Tombstone history is deliberately not part of this decision. @param {object[]} rules Active local rules. @param {object} scope Proposed scope. @param {string|null|undefined} excludedRuleId Existing rule being edited, if any. @returns {object|null} Conflicting active rule, if present. */
+export function findActiveRuleByCanonicalIdentity(rules, scope, excludedRuleId = null) {
+  const identity = canonicalMatchKey(scope);
+  if (identity === null || !Array.isArray(rules)) return null;
+  return rules.find((rule) => rule?.id !== excludedRuleId && canonicalMatchKey(rule.scope) === identity) ?? null;
+}
+
+
 /** Derives the exact canonical identity that a prospective rule for a URL would use. @param {string} url Source URL. @param {string} type Selected scope type. @returns {string|null} Canonical identity or null while the form is incomplete. */
 export function canonicalMatchKeyForUrl(url, type) {
   const value = scopeForUrl(url, type);
@@ -33,6 +41,12 @@ export async function syncRuleIdForScope(scope) {
 export function abbreviateOpaqueId(value) {
   if (typeof value !== "string" || !value) return "—";
   return value.length <= 16 ? value : `${value.slice(0, 8)}…${value.slice(-8)}`;
+}
+
+
+/** Returns the next monotonic semantic revision after every valid known revision for one sync identity. @param {...unknown} revisions Local or cloud semantic revisions. @returns {number} Next revision, or one when no history exists. */
+export function nextSemanticRevision(...revisions) {
+  return Math.max(0, ...revisions.filter((revision) => Number.isInteger(revision) && revision > 0)) + 1;
 }
 
 

@@ -31,6 +31,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 Import-Module (Join-Path $PSScriptRoot 'release-changelog.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'release-diagnostics.psm1') -Force
 
 
 <# The GitHub repository that receives every SmartWindowSize Draft Release. #>
@@ -171,7 +172,8 @@ function Require-Command {
 
     $command = Get-Command -Name $Name -ErrorAction SilentlyContinue
     if ($null -eq $command) {
-        throw "Required tool '$Name' is not available on PATH. Install it before creating a release."
+        if ($Name -eq 'gh') { throw (Get-GitHubCliDiagnostic -Reason 'GitHub CLI (gh) was not found.') }
+        throw "Required tool '$Name' was not found. Install it before creating a release."
     }
 
     return $command.Source
@@ -374,7 +376,7 @@ function Invoke-ReleasePreflight {
     # A clean synchronized tree guarantees the tag identifies the already committed product state.
     $workingTree = Invoke-RepositoryGitCommand -GitPath $gitPath -Arguments @('status', '--porcelain=v1', '--untracked-files=all') -Description 'Checking Git working tree'
     if (-not [string]::IsNullOrWhiteSpace($workingTree)) {
-        throw "Git working tree is not clean. Commit, stash, or otherwise resolve changes before releasing.`n$workingTree"
+        throw (Get-WorkingTreeDiagnostic -Status $workingTree)
     }
 
     $branch = Invoke-RepositoryGitCommand -GitPath $gitPath -Arguments @('branch', '--show-current') -Description 'Checking release branch'
@@ -390,8 +392,12 @@ function Invoke-ReleasePreflight {
     # Refresh remote references before comparing branch ancestry and release-tag availability.
     Invoke-RepositoryGitCommand -GitPath $gitPath -Arguments @('fetch', 'origin', '--tags') -Description 'Fetching origin release state' | Out-Null
     $syncCounts = Invoke-RepositoryGitCommand -GitPath $gitPath -Arguments @('rev-list', '--left-right', '--count', "$ReleaseBranch...origin/$ReleaseBranch") -Description 'Checking branch synchronization'
-    if ($syncCounts -notmatch '^0\s+0$') {
-        throw "Local '$ReleaseBranch' is not synchronized with origin/$ReleaseBranch (ahead behind: $syncCounts)."
+    if ($syncCounts -notmatch '^(?<ahead>\d+)\s+(?<behind>\d+)$') { throw "Unable to interpret branch synchronization counts: $syncCounts" }
+    $sync = [regex]::Match($syncCounts, '^(?<ahead>\d+)\s+(?<behind>\d+)$')
+    $ahead = [int]$sync.Groups['ahead'].Value; $behind = [int]$sync.Groups['behind'].Value
+    $branchDiagnostic = Get-BranchSyncDiagnostic -Branch $ReleaseBranch -Ahead $ahead -Behind $behind
+    if ($null -ne $branchDiagnostic) {
+        throw $branchDiagnostic
     }
 
     Invoke-NativeCommand -Executable $ghPath -Arguments @('auth', 'status', '--hostname', 'github.com') -Description 'Checking GitHub CLI authentication' | Out-Null
@@ -399,7 +405,7 @@ function Invoke-ReleasePreflight {
     $version = Get-ManifestVersion -ManifestPath $manifestPath
     $template = Get-Content -LiteralPath $firefoxTemplatePath -Raw | ConvertFrom-Json
     if ($template.version -and $template.version -ne '__VERSION__' -and $template.version -ne $version) {
-        throw "Firefox manifest version '$($template.version)' does not match root manifest version '$version'."
+        throw (Get-VersionMismatchDiagnostic -RootVersion $version -FirefoxVersion $template.version)
     }
 
     $tag = "v$version"
@@ -450,7 +456,7 @@ function Invoke-DryRunPreflight {
     # Report dirty state without blocking package testing; the real release keeps this as a hard stop.
     $workingTree = Invoke-RepositoryGitCommand -GitPath $gitPath -Arguments @('status', '--porcelain=v1', '--untracked-files=all') -Description 'Checking Git working tree'
     if (-not [string]::IsNullOrWhiteSpace($workingTree)) {
-        $warnings.Add("Real release is blocked by a non-clean Git working tree:`n$workingTree")
+        $warnings.Add((Get-WorkingTreeDiagnostic -Status $workingTree))
     }
 
     $branch = Invoke-RepositoryGitCommand -GitPath $gitPath -Arguments @('branch', '--show-current') -Description 'Checking release branch'
@@ -464,15 +470,14 @@ function Invoke-DryRunPreflight {
     }
     else {
         $syncCounts = Invoke-RepositoryGitCommand -GitPath $gitPath -Arguments @('rev-list', '--left-right', '--count', "$ReleaseBranch...origin/$ReleaseBranch") -Description 'Checking cached branch synchronization'
-        if ($syncCounts -notmatch '^0\s+0$') {
-            $warnings.Add("Real release requires '$ReleaseBranch' to be synchronized with origin/$ReleaseBranch (ahead behind: $syncCounts).")
-        }
+        $sync = [regex]::Match($syncCounts, '^(?<ahead>\d+)\s+(?<behind>\d+)$')
+        if (-not $sync.Success) { $warnings.Add("Unable to interpret branch synchronization counts: $syncCounts") } else { $branchDiagnostic = Get-BranchSyncDiagnostic -Branch $ReleaseBranch -Ahead ([int]$sync.Groups['ahead'].Value) -Behind ([int]$sync.Groups['behind'].Value); if ($null -ne $branchDiagnostic) { $warnings.Add($branchDiagnostic) } }
     }
 
     $version = Get-ManifestVersion -ManifestPath $manifestPath
     $template = Get-Content -LiteralPath $firefoxTemplatePath -Raw | ConvertFrom-Json
     if ($template.version -and $template.version -ne '__VERSION__' -and $template.version -ne $version) {
-        throw "Firefox manifest version '$($template.version)' does not match root manifest version '$version'."
+        throw (Get-VersionMismatchDiagnostic -RootVersion $version -FirefoxVersion $template.version)
     }
 
     $tag = "v$version"
@@ -482,7 +487,7 @@ function Invoke-DryRunPreflight {
     $safeDirectory = $ProjectRoot -replace '\\', '/'
     $localTagResult = Get-NativeCommandResult -Executable $gitPath -Arguments @('-c', "safe.directory=$safeDirectory", '-C', $ProjectRoot, 'show-ref', '--tags', '--verify', '--quiet', "refs/tags/$tag") -Description "Checking local Git tag '$tag'"
     if ($localTagResult.ExitCode -eq 0) {
-        $warnings.Add("Real release is blocked because local tag '$tag' already exists.")
+        $warnings.Add((Get-TagConflictDiagnostic -Tag $tag -Local $true -Remote $false))
     }
     elseif ($localTagResult.ExitCode -ne 1) {
         $warnings.Add("Local tag '$tag' could not be verified: $($localTagResult.StandardError)")
@@ -492,12 +497,12 @@ function Invoke-DryRunPreflight {
         $warnings.Add("Remote tag '$tag' could not be verified: $($remoteTagResult.StandardError)")
     }
     elseif (-not [string]::IsNullOrWhiteSpace($remoteTagResult.StandardOutput)) {
-        $warnings.Add("Real release is blocked because remote tag '$tag' already exists.")
+        $warnings.Add((Get-TagConflictDiagnostic -Tag $tag -Local $false -Remote $true))
     }
 
     $ghCommand = Get-Command -Name 'gh' -ErrorAction SilentlyContinue
     if ($null -eq $ghCommand) {
-        $warnings.Add('GitHub CLI gh is unavailable; GitHub authentication, remote tag, and existing Release checks were not performed.')
+        $warnings.Add((Get-GitHubCliDiagnostic -Reason 'GitHub CLI (gh) was not found.'))
         $ghPath = $null
     }
     else {

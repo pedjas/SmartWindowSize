@@ -9,10 +9,11 @@ import vm from "node:vm";
 import { createDefaultConfig, normalizeConfig } from "../core/config.js";
 import { matchingRulesForUrl, resolveRule } from "../core/rule-resolver.js";
 import { SCOPE_PRIORITY, scopeForUrl } from "../core/rule-matcher.js";
-import { canonicalMatchKey, canonicalMatchKeyForUrl } from "../core/rule-sync.js";
+import { canonicalMatchKey, canonicalMatchKeyForUrl, findActiveRuleByCanonicalIdentity } from "../core/rule-sync.js";
 import { RULE_TYPE_LABELS, RULE_TYPE_DESCRIPTORS } from "../core/rule-types.js";
 import { fingerprint } from "../core/configuration-actions.js";
 import { windowBoundsChanged } from "../core/window-bounds.js";
+import { formatClientIdForDisplay } from "../core/client-id-presentation.js";
 
 
 /** Loads an ESM script without imports for dependency-injected VM execution. @param {string} path Project-relative script path. @returns {Promise<string>} Executable script body. */
@@ -140,7 +141,7 @@ async function ruleEditorFixture(access = {}) {
   let onMessage;
   let confirmations = 0;
   const context = vm.createContext({
-    APP_VERSION: "test", SCOPE_PRIORITY, RULE_TYPE_LABELS, scopeForUrl, canonicalMatchKey, canonicalMatchKeyForUrl, matchingRulesForUrl, resolveRule, URL, structuredClone, crypto: { randomUUID: () => "test-id" },
+    APP_VERSION: "test", SCOPE_PRIORITY, RULE_TYPE_LABELS, scopeForUrl, canonicalMatchKey, canonicalMatchKeyForUrl, findActiveRuleByCanonicalIdentity, matchingRulesForUrl, resolveRule, formatClientIdForDisplay, URL, structuredClone, crypto: { randomUUID: () => "test-id" },
     installClientErrors: () => {}, runClientAction: async (_operation, action) => action(),
     request: async (message) => {
       requests.push(message);
@@ -180,6 +181,21 @@ test("Add rule starts with a usable domain-tree scope", async () => {
   assert.equal(fixture.state().rules.length, 2);
   await controls.get("save").listeners.click();
   assert.equal(fixture.requests.at(-1).type, "save-site-rules");
+});
+
+
+test("the rule-editor Add path rejects only an active canonical duplicate, not deleted history", async () => {
+  const active = await ruleEditorFixture();
+  active.controls.get("add").listeners.click();
+  active.controls.get("selected-scope").value = "domain_exact";
+  await assert.rejects(active.controls.get("editor").listeners.submit({ preventDefault() {} }), /active rule.*effective scope/i);
+  assert.equal(active.state().rules.length, 1);
+
+  const deleted = await ruleEditorFixture({ rules: [], sync: { tombstones: { deleted: { id: "deleted", revision: 2, deleted: true } } } });
+  deleted.controls.get("add").listeners.click();
+  deleted.controls.get("selected-scope").value = "domain_exact";
+  await deleted.controls.get("editor").listeners.submit({ preventDefault() {} });
+  assert.equal(deleted.state().rules.length, 1);
 });
 
 test("every supported rule type has one shared presentation label", () => {

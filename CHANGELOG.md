@@ -1,5 +1,36 @@
 # CHANGELOG
 
+## 1.1.13 - 2026-10-09
+
+- Improve release preflight diagnostics with actionable working-tree, branch
+  synchronization, version, tag, and GitHub CLI guidance.
+- Give Chromium and Brave development builds a stable public-key extension
+  identity, and show Extension ID separately from each installation's Client ID.
+- Add full visible `storage.sync` reconciliation: import cloud-only rules,
+  provide Sync now through the normal reconciliation engine, show cloud
+  active/status/tombstone counts and last-sync results, and catch up at startup
+  or when Rules Sync is enabled.
+- Keep enabled state, existing size, position, and monitor/display local during
+  semantic synchronization; cloud dimensions seed only a genuinely new import.
+- Adopt authoritative remote deletions as local tombstones, and allow newer
+  remote active state to recreate a tombstoned local rule without publishing it
+  back.
+- Let an explicit re-add reuse its deterministic sync ID, clear its prior
+  tombstone, continue monotonic semantic revision history, and synchronize the
+  recreated active rule to other clients.
+- Centralize Rules Sync arbitration: revision is primary; `modifiedAt` is only
+  an equal-revision fallback for different clients, while unresolved equality
+  remains a conflict.
+- Track received-from-sync lineage across later semantic edits, and mark
+  Modified by as `(local)` when the shared modifier is this installation.
+- Centralize active canonical duplicate detection so tombstone-only history
+  does not block an explicit Add.
+- Add isolated two-client regression coverage for create/import/edit, deletion
+  propagation, recreate and repeated lifecycle, and startup catch-up; a
+  transient sync read failure no longer blocks local rule Save.
+
+# Released
+
 ## 1.1.3 - 2026-10-02
 
 - Clarify version-increment exception handling and allow wrapped pending
@@ -50,8 +81,6 @@
 - Treat tabs closed during asynchronous lifecycle work as expected stale
   resources, preventing browser error-log spam while retaining unexpected
   browser failures in Diagnostics.
-
-# Released
 
 ## 1.0.52 - 2026-10-01
 
@@ -134,7 +163,7 @@
   sizing; manual input selects Custom instead of retaining a stale preset.
 - Map **Automatically set window size if no rules** to the global default-size
   behavior, so custom Width and Height values are applied instead of the
-  previous 1200 Ä‚â€žĂ˘â‚¬ĹˇÄ‚ËĂ˘â€šÂ¬Ă˘â‚¬ĹĄ 960 default.
+  previous 1200 Ă„â€šĂ˘â‚¬ĹľÄ‚ËĂ˘â€šÂ¬ÄąË‡Ă„â€šĂ‹ÂÄ‚ËĂ˘â‚¬ĹˇĂ‚Â¬Ä‚ËĂ˘â€šÂ¬ÄąÄ„ 960 default.
 - Enable Configuration `Width` and `Height` whenever automatic no-rule window
   sizing is enabled, including when a preset is selected.
 - Treat a stale **Set rules for this site** dialog as an expected visible state

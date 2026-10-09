@@ -8,7 +8,32 @@ globalThis.chrome = { storage: { sync: {
   async set(values) { Object.assign(cloud, structuredClone(values)); }
 } } };
 
-const { activeCloudRecord, applyCloudDefinition, readCloudRule, writeCloudRule } = await import("../core/rule-sync-store.js");
+const { activeCloudRecord, applyCloudDefinition, compareSyncStates, readCloudRule, SYNC_STATE_ORDER, writeCloudRule } = await import("../core/rule-sync-store.js");
+
+/** Builds one minimal active or deleted state for comparator cases. @param {object} overrides State changes. @returns {object} Cloud-shaped state. */
+function syncState(overrides = {}) {
+  const status = { revision: 5, modifiedAt: "2026-10-09T10:00:00.000Z", modifiedByClientId: "client-a", deleted: false, ...(overrides.status ?? {}) };
+  return { status, ...(status.deleted ? {} : { definition: { scope: { type: "domain_tree", value: "example.com" }, rememberPosition: false, rememberMonitor: false, seedWidth: 800, seedHeight: 600, ...(overrides.definition ?? {}) } }) };
+}
+
+test("central sync-state arbitration is revision-first and limits timestamps to different-client equal-revision collisions", () => {
+  const local = syncState();
+  const cases = [
+    ["higher local revision", syncState({ status: { revision: 6 } }), syncState(), SYNC_STATE_ORDER.LOCAL_WINS],
+    ["higher cloud revision", local, syncState({ status: { revision: 6 } }), SYNC_STATE_ORDER.CLOUD_WINS],
+    ["equal active semantic state", local, syncState({ status: { modifiedAt: "2026-10-09T11:00:00.000Z", modifiedByClientId: "client-b" } }), SYNC_STATE_ORDER.EQUIVALENT],
+    ["equal tombstones", syncState({ status: { deleted: true } }), syncState({ status: { deleted: true, modifiedByClientId: "client-b" } }), SYNC_STATE_ORDER.EQUIVALENT],
+    ["different active definitions with newer cloud client", local, syncState({ status: { modifiedAt: "2026-10-09T11:00:00.000Z", modifiedByClientId: "client-b" }, definition: { rememberPosition: true } }), SYNC_STATE_ORDER.CLOUD_WINS],
+    ["different active definitions with newer local client", syncState({ status: { modifiedAt: "2026-10-09T11:00:00.000Z" } }), syncState({ status: { modifiedByClientId: "client-b" }, definition: { rememberPosition: true } }), SYNC_STATE_ORDER.LOCAL_WINS],
+    ["active versus tombstone with newer cloud client", local, syncState({ status: { deleted: true, modifiedAt: "2026-10-09T11:00:00.000Z", modifiedByClientId: "client-b" } }), SYNC_STATE_ORDER.CLOUD_WINS],
+    ["tombstone versus active with newer local client", syncState({ status: { deleted: true, modifiedAt: "2026-10-09T11:00:00.000Z" } }), syncState({ status: { modifiedByClientId: "client-b" } }), SYNC_STATE_ORDER.LOCAL_WINS],
+    ["same-client disagreement", local, syncState({ status: { deleted: true, modifiedAt: "2026-10-09T11:00:00.000Z" } }), SYNC_STATE_ORDER.CONFLICT],
+    ["equal timestamps", local, syncState({ status: { deleted: true, modifiedByClientId: "client-b" } }), SYNC_STATE_ORDER.CONFLICT],
+    ["missing timestamp", syncState({ status: { modifiedAt: null } }), syncState({ status: { deleted: true, modifiedByClientId: "client-b" } }), SYNC_STATE_ORDER.CONFLICT],
+    ["invalid timestamp", syncState({ status: { modifiedAt: "not-a-date" } }), syncState({ status: { deleted: true, modifiedByClientId: "client-b" } }), SYNC_STATE_ORDER.CONFLICT]
+  ];
+  for (const [name, left, right, expected] of cases) assert.equal(compareSyncStates(left, right), expected, name);
+});
 
 test("cloud records retain semantic behavior and seed dimensions only", async () => {
   const local = { id: "local", scope: { type: "domain_tree", value: "example.com" }, enabled: false, width: 900, height: 700,
@@ -22,4 +47,15 @@ test("cloud records retain semantic behavior and seed dimensions only", async ()
   assert.equal(applied.width, 900);
   assert.equal(applied.position.enabled, false);
   assert.equal(applied.display.id, "display-a");
+});
+
+test("received-from-sync lineage remains local while later cloud revisions preserve it", () => {
+  const imported = { id: "local", scope: { type: "domain_tree", value: "example.com" }, enabled: false, width: 800, height: 600,
+    position: { enabled: false, x: null, y: null }, display: { enabled: false, id: null }, sync: { id: "abc", revision: 1, modifiedAt: "2026-10-01T10:00:00.000Z", modifiedByClientId: "client-a", origin: "sync", conflict: null } };
+  const record = activeCloudRecord(imported);
+  assert.equal(record.status.origin, "user");
+  const applied = applyCloudDefinition(imported, { ...record, status: { ...record.status, revision: 2, modifiedByClientId: "client-b" } });
+  assert.equal(applied.sync.origin, "sync");
+  assert.equal(applied.sync.modifiedByClientId, "client-b");
+  assert.equal(applied.width, 800);
 });

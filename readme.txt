@@ -33,6 +33,11 @@ SmartWindowSize does not operate a server or require a separate account. Rule
 scope and remember choices can sync, while enabled state, actual size, position,
 monitor, diagnostics, and runtime state remain local to each computer.
 
+The supplied Chromium and Brave build has the stable Extension ID
+knonkimekepimholflhdgnogdbjndiaa. In Configuration, Diagnostics, Environment /
+Sync, verify that Extension ID is this same value on each computer. Client ID
+identifies one local installation and must be different on each computer.
+
 Cloud dimensions are a starting size only for a browser receiving a new rule.
 Use Set current size as synced default from the toolbar context menu on a page
 with an applicable rule to update that starting size. Refresh from cloud is in

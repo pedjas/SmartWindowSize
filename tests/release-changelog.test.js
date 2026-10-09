@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 
 const execFileAsync = promisify(execFile);
 const modulePath = fileURLToPath(new URL("../tools/release-changelog.psm1", import.meta.url));
+const diagnosticsModulePath = fileURLToPath(new URL("../tools/release-diagnostics.psm1", import.meta.url));
 
 
 /** Quotes one local path for the PowerShell command line used by the real parser module. @param {string} value Local path. @returns {string} PowerShell single-quoted literal. */
@@ -21,6 +22,13 @@ function psLiteral(value) {
 /** Runs the actual PowerShell parser module and returns its standard output. @param {string} command Module invocation. @returns {Promise<string>} Captured output. */
 async function runPowerShell(command) {
   const result = await execFileAsync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `$ErrorActionPreference = 'Stop'; Import-Module ${psLiteral(modulePath)} -Force; ${command}`]);
+  return result.stdout;
+}
+
+
+/** Runs the shared PowerShell release diagnostics module. @param {string} command Module invocation. @returns {Promise<string>} Captured output. */
+async function runDiagnosticsPowerShell(command) {
+  const result = await execFileAsync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `$ErrorActionPreference = 'Stop'; Import-Module ${psLiteral(diagnosticsModulePath)} -Force; ${command}`]);
   return result.stdout;
 }
 
@@ -95,4 +103,22 @@ test("release rejects pending bullets and marker movement preserves milestone bl
     await runPowerShell(`$state = Get-UnreleasedMilestoneSections -ChangelogPath ${psLiteral(path)} -Version '1.1.0'; Move-ReleasedMarker -ChangelogPath ${psLiteral(path)} -UnreleasedMilestones $state`);
     assert.equal(await readFile(path, "utf8"), "# CHANGELOG\r\n\r\n# Released\r\n\r\n## 1.1.0 - 2026-10-02\r\n- Final.\r\n\r\n## 1.0.32 - 2026-10-02\r\n- Prior.\r\n\r\n## 1.0.23 - 2026-10-01\r\n- Old.\r\n");
   });
+});
+
+
+test("shared diagnostics explain Git, working-tree, version, tag, and gh remediation", async () => {
+  const ahead = await runDiagnosticsPowerShell(`[Console]::Write((Get-BranchSyncDiagnostic -Branch 'master' -Ahead 2 -Behind 0))`);
+  assert.match(ahead, /not been pushed/); assert.match(ahead, /git push origin master/); assert.doesNotMatch(ahead, /pull/i);
+  const behind = await runDiagnosticsPowerShell(`[Console]::Write((Get-BranchSyncDiagnostic -Branch 'master' -Ahead 0 -Behind 2))`);
+  assert.match(behind, /behind origin\/master/);
+  const diverged = await runDiagnosticsPowerShell(`[Console]::Write((Get-BranchSyncDiagnostic -Branch 'master' -Ahead 1 -Behind 1))`);
+  assert.match(diverged, /diverged/); assert.match(diverged, /Do not force-push as the default/i);
+  const dirty = await runDiagnosticsPowerShell(`[Console]::Write((Get-WorkingTreeDiagnostic -Status ' M CHANGELOG.md'))`);
+  assert.match(dirty, /CHANGELOG\.md/);
+  const version = await runDiagnosticsPowerShell(`[Console]::Write((Get-VersionMismatchDiagnostic -RootVersion '1.1.4' -FirefoxVersion '1.1.3'))`);
+  assert.match(version, /1\.1\.4/); assert.match(version, /1\.1\.3/);
+  const tag = await runDiagnosticsPowerShell(`[Console]::Write((Get-TagConflictDiagnostic -Tag 'v1.1.4' -Local $true -Remote $false))`);
+  assert.match(tag, /Local tag v1\.1\.4 already exists/);
+  const gh = await runDiagnosticsPowerShell(`[Console]::Write((Get-GitHubCliDiagnostic -Reason 'GitHub CLI \(gh\) was not found.'))`);
+  assert.match(gh, /gh auth status/);
 });

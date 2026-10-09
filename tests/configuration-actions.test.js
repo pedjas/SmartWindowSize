@@ -31,6 +31,31 @@ test("global and rule-delete conflicts preserve newer settings", () => {
   assert.equal(config.rules.length, 1);
 });
 
+test("an explicit Add clears a matching local tombstone while retaining its deterministic rule identity", () => {
+  const config = createDefaultConfig();
+  config.sync.clientId = "client-a";
+  const added = rule();
+  added.sync = { id: "0123456789abcdef0123456789abcdef", revision: 1, modifiedAt: "2026-10-09T10:00:00.000Z", modifiedByClientId: "client-a", origin: "user", conflict: null };
+  config.sync.tombstones[added.sync.id] = { id: added.sync.id, revision: 2, modifiedAt: "2026-10-09T09:00:00.000Z", modifiedByClientId: "client-a", deleted: true };
+  const result = applySiteRuleEdits(config, "https://alpha.example/", { url: "https://alpha.example/", baseRules: [], rules: [added] });
+  assert.equal(result.rules[0].sync.id, added.sync.id);
+  assert.equal(result.sync.tombstones[added.sync.id], undefined);
+});
+
+
+test("an explicit re-add continues the highest known semantic revision for its deterministic identity", () => {
+  const config = createDefaultConfig();
+  config.sync.clientId = "client-a";
+  const added = rule();
+  added.sync = { id: "0123456789abcdef0123456789abcdef", revision: 1, modifiedAt: "2026-10-09T10:00:00.000Z", modifiedByClientId: "client-a", origin: "user", conflict: null };
+  config.sync.tombstones[added.sync.id] = { id: added.sync.id, revision: 8, modifiedAt: "2026-10-09T10:01:00.000Z", modifiedByClientId: "client-a", deleted: true };
+  const result = applySiteRuleEdits(config, "https://alpha.example/", { url: "https://alpha.example/", baseRules: [], rules: [added], knownCloudRevisions: { [added.sync.id]: 10 } });
+  assert.equal(result.rules[0].sync.id, added.sync.id);
+  assert.equal(result.rules[0].sync.revision, 11);
+  assert.equal(result.rules[0].sync.origin, "user");
+  assert.equal(result.sync.tombstones[added.sync.id], undefined);
+});
+
 
 test("site Save preserves unrelated rules and rejects new overlapping rules added concurrently", () => {
   const config = createDefaultConfig();

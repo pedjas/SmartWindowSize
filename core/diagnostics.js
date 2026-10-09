@@ -122,6 +122,16 @@ export async function recordDiagnostic(operation, error, debug = false, context 
   return work;
 }
 
+/** Adds a verbose trace without classifying normal explicit synchronization as an error. @param {string} operation Operation. @param {string} message Result. @param {object|undefined} context Technical context. @returns {Promise<number>} Retained count. */
+export async function recordDiagnosticEvent(operation, message, context = undefined) {
+  const work = diagnosticQueue.catch(() => undefined).then(async () => {
+    const entries = await readEntries();
+    entries.push({ kind: "trace", occurredAt: new Date().toISOString(), operation: hideUrls(operation).slice(0, 200), message: hideUrls(message).slice(0, 4000), technical: { context: copyDiagnosticContext(context) } });
+    const retained = entries.slice(-MAXIMUM_DIAGNOSTIC_ENTRIES); await writeSession(DIAGNOSTICS_KEY, retained); return retained.length;
+  });
+  diagnosticQueue = work.catch(() => undefined); return work;
+}
+
 
 /** Clears every diagnostic entry after the user has reviewed or copied it. @returns {Promise<void>} Completes after session storage is cleared. */
 export async function clearDiagnostics() {

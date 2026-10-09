@@ -1,5 +1,5 @@
 /**
- * SmartWindowSize | Version: 1.1.0 | Last updated: 2026-10-02 18:20:11 +02:00
+ * SmartWindowSize | Version: 1.1.13 | Last updated: 2026-10-09 00:00:00 +02:00
  *
  * Coordinates serialized window operations, validated configuration writes,
  * unique dialogs, and session diagnostics.
@@ -15,11 +15,11 @@ import { createRuleId, normalizeScopeType } from "../core/config.js";
 import { applyConfigurationAction, applySiteRuleEdits, fingerprint } from "../core/configuration-actions.js";
 import { windowBoundsChanged } from "../core/window-bounds.js";
 import { scopeForUrl, toUrl } from "../core/rule-matcher.js";
-import { canonicalMatchKey, abbreviateOpaqueId, syncRuleIdForScope } from "../core/rule-sync.js";
-import { clearDiagnostics, loadDiagnostics, recordDiagnostic } from "../core/diagnostics.js";
+import { canonicalMatchKey, abbreviateOpaqueId, findActiveRuleByCanonicalIdentity, syncRuleIdForScope } from "../core/rule-sync.js";
+import { clearDiagnostics, loadDiagnostics, recordDiagnostic, recordDiagnosticEvent } from "../core/diagnostics.js";
 import { readSession, writeSession, removeSession } from "../core/runtime-session.js";
 import { getTabIfExists, isMissingTabError } from "../core/tab-lifecycle.js";
-import { activeCloudRecord, applyCloudDefinition, deletedCloudRecord, readCloudRule, sameSemanticDefinition, writeCloudRule } from "../core/rule-sync-store.js";
+import { activeCloudRecord, applyCloudDefinition, compareSyncStates, deletedCloudRecord, readCloudRule, readVisibleCloudRules, SYNC_STATE_ORDER, writeCloudRule } from "../core/rule-sync-store.js";
 
 /** Per-window operation chains prevent rule application and persistence races. @type {Map<number, Promise<unknown>>} */
 const windowQueues = new Map();
@@ -92,39 +92,64 @@ let applyingCloudRules = false;
 
 
 /** Reconciles every local sync-aware rule with its independent cloud record. @returns {Promise<void>} Completion after writes and safe local imports. */
-function reconcileRulesWithCloud() {
+function reconcileRulesWithCloud(manual = false) {
   ruleSyncQueue = ruleSyncQueue.catch(() => undefined).then(async () => {
     const config = await loadConfig();
-    if (!config.global.syncRules || !chrome.storage.sync) return;
+    if (!config.global.syncRules || !chrome.storage.sync) return { skipped: true, received: 0, uploaded: 0, deleted: 0, conflicts: 0, cloud: { active: 0, status: 0, tombstones: 0, malformed: 0 } };
+    if (manual && config.global.diagnosticLevel === "verbose") await recordDiagnosticEvent("Rules Sync now", "Started full reconciliation.", { localRules: config.rules.length });
+    const visible = await readVisibleCloudRules();
     const removals = new Set();
     const replacements = new Map();
+    const additions = [];
+    const seen = new Set();
+    const clearedTombstones = new Set();
+    const adoptedTombstones = new Map();
+    const result = { skipped: false, received: 0, uploaded: 0, deleted: 0, conflicts: 0, cloud: visible.counts };
     for (const rule of config.rules) {
-      const cloud = await readCloudRule(rule.sync.id);
-      if (!cloud) { await writeCloudRule(rule.sync.id, activeCloudRecord(rule)); continue; }
-      if (cloud.status.deleted) {
-        if (cloud.status.revision >= rule.sync.revision) removals.add(rule.id);
-        else await writeCloudRule(rule.sync.id, activeCloudRecord(rule));
+      const cloud = visible.records.get(rule.sync.id); seen.add(rule.sync.id);
+      if (!cloud) { await writeCloudRule(rule.sync.id, activeCloudRecord(rule)); result.uploaded++; continue; }
+      const local = activeCloudRecord(rule);
+      const order = compareSyncStates(local, cloud);
+      if (order === SYNC_STATE_ORDER.CLOUD_WINS) {
+        if (cloud.status.deleted) {
+          removals.add(rule.id);
+          adoptedTombstones.set(rule.sync.id, { id: rule.sync.id, revision: cloud.status.revision, modifiedAt: cloud.status.modifiedAt, modifiedByClientId: cloud.status.modifiedByClientId, deleted: true });
+          result.deleted++;
+        }
+        else { replacements.set(rule.id, applyCloudDefinition(rule, cloud)); result.received++; }
         continue;
       }
-      const localDefinition = activeCloudRecord(rule).definition;
-      if (cloud.status.revision > rule.sync.revision) replacements.set(rule.id, applyCloudDefinition(rule, cloud));
-      else if (rule.sync.revision > cloud.status.revision) await writeCloudRule(rule.sync.id, activeCloudRecord(rule));
-      else if (sameSemanticDefinition(localDefinition, cloud.definition)) continue;
-      else if (rule.sync.origin === "user" && cloud.status.origin === "user" && rule.sync.modifiedByClientId !== cloud.status.modifiedByClientId &&
-        Date.parse(rule.sync.modifiedAt ?? "") !== Date.parse(cloud.status.modifiedAt ?? "")) {
-        if (Date.parse(rule.sync.modifiedAt) > Date.parse(cloud.status.modifiedAt)) await writeCloudRule(rule.sync.id, activeCloudRecord(rule));
-        else replacements.set(rule.id, applyCloudDefinition(rule, cloud));
-      } else replacements.set(rule.id, { ...rule, sync: { ...rule.sync, conflict: { kind: "equal-revision-definition-conflict", cloud: cloud.status } } });
+      if (order === SYNC_STATE_ORDER.LOCAL_WINS) { await writeCloudRule(rule.sync.id, local); result.uploaded++; continue; }
+      if (order === SYNC_STATE_ORDER.EQUIVALENT) continue;
+      replacements.set(rule.id, { ...rule, sync: { ...rule.sync, conflict: { kind: cloud.status.deleted ? "equal-revision-state-conflict" : "equal-revision-definition-conflict", cloud: cloud.status } } }); result.conflicts++;
     }
     for (const tombstone of Object.values(config.sync.tombstones ?? {})) {
-      const cloud = await readCloudRule(tombstone.id);
-      if (!cloud || cloud.status.revision <= tombstone.revision) await writeCloudRule(tombstone.id, deletedCloudRecord(tombstone));
+      const cloud = visible.records.get(tombstone.id); seen.add(tombstone.id);
+      const local = deletedCloudRecord(tombstone);
+      if (!cloud) { await writeCloudRule(tombstone.id, local); result.uploaded++; continue; }
+      const order = compareSyncStates(local, cloud);
+      if (order === SYNC_STATE_ORDER.CLOUD_WINS) {
+        if (cloud.status.deleted) adoptedTombstones.set(tombstone.id, { id: tombstone.id, revision: cloud.status.revision, modifiedAt: cloud.status.modifiedAt, modifiedByClientId: cloud.status.modifiedByClientId, deleted: true });
+        else if (await syncRuleIdForScope(cloud.definition.scope) === tombstone.id) {
+          clearedTombstones.add(tombstone.id);
+          additions.push({ id: createRuleId(), scope: structuredClone(cloud.definition.scope), enabled: true, width: cloud.definition.seedWidth, height: cloud.definition.seedHeight, position: { enabled: false, x: null, y: null }, display: { enabled: false, id: null }, lastUpdatedAt: new Date().toISOString(), sync: { id: tombstone.id, revision: cloud.status.revision, modifiedAt: cloud.status.modifiedAt, modifiedByClientId: cloud.status.modifiedByClientId, origin: "sync", conflict: null } }); result.received++;
+        }
+        continue;
+      }
+      if (order === SYNC_STATE_ORDER.LOCAL_WINS) { await writeCloudRule(tombstone.id, local); result.uploaded++; continue; }
+      if (order === SYNC_STATE_ORDER.CONFLICT) { result.conflicts++; await recordDiagnosticEvent("Rules Sync conflict", "Equal-revision local tombstone and cloud active state could not be ordered.", { syncRuleId: tombstone.id, local: tombstone, cloud: cloud.status }); }
     }
-    if (removals.size || replacements.size) {
+    for (const [id, cloud] of visible.records) if (!seen.has(id) && !cloud.status.deleted && await syncRuleIdForScope(cloud.definition.scope) === id) {
+      additions.push({ id: createRuleId(), scope: structuredClone(cloud.definition.scope), enabled: true, width: cloud.definition.seedWidth, height: cloud.definition.seedHeight, position: { enabled: false, x: null, y: null }, display: { enabled: false, id: null }, lastUpdatedAt: new Date().toISOString(), sync: { id, revision: cloud.status.revision, modifiedAt: cloud.status.modifiedAt, modifiedByClientId: cloud.status.modifiedByClientId, origin: "sync", conflict: null } }); result.received++;
+    }
+    if (removals.size || replacements.size || additions.length || clearedTombstones.size || adoptedTombstones.size) {
       applyingCloudRules = true;
-      try { await updateConfig((current) => ({ ...current, rules: current.rules.filter((rule) => !removals.has(rule.id)).map((rule) => replacements.get(rule.id) ?? rule) })); }
+      try { await updateConfig((current) => ({ ...current, sync: { ...current.sync, tombstones: { ...Object.fromEntries(Object.entries(current.sync.tombstones ?? {}).filter(([id]) => !clearedTombstones.has(id))), ...Object.fromEntries(adoptedTombstones) } }, rules: [...current.rules.filter((rule) => !removals.has(rule.id)).map((rule) => replacements.get(rule.id) ?? rule), ...additions] })); }
       finally { applyingCloudRules = false; }
     }
+    await writeSession("rulesSyncLastResult", { occurredAt: new Date().toISOString(), ...result });
+    if (manual && config.global.diagnosticLevel === "verbose") await recordDiagnosticEvent("Rules Sync now", "Full reconciliation completed.", result);
+    return result;
   });
   return ruleSyncQueue;
 }
@@ -316,8 +341,11 @@ async function saveSiteRulesForEditor(registry, message) {
         throw new Error("Restore the source window before saving its dimensions.");
       }
       const display = await displayForRule(null, window);
-      await updateConfig((config) => {
-        const candidate = applySiteRuleEdits(config, entry.url, message);
+      const knownCloudRevisions = Object.fromEntries((await Promise.all(message.rules.filter((rule) => rule.sync?.id).map(async (rule) => [rule.sync.id, (await readCloudRule(rule.sync.id).catch(() => null))?.status.revision]))).filter(([, revision]) => Number.isInteger(revision)));
+      const recreatedRules = [];
+      applyingCloudRules = true;
+      try { await updateConfig((config) => {
+        const candidate = applySiteRuleEdits(config, entry.url, { ...message, knownCloudRevisions });
         const changedIds = new Set(message.rules.filter((rule) => fingerprint(rule) !== fingerprint(message.baseRules.find((base) => base.id === rule.id))).map((rule) => rule.id));
         candidate.rules = candidate.rules.map((rule) => changedIds.has(rule.id) ? {
           ...rule, width: window.width, height: window.height,
@@ -325,8 +353,12 @@ async function saveSiteRulesForEditor(registry, message) {
           display: rule.display.enabled && display ? { enabled: true, id: display.id } : rule.display,
           lastUpdatedAt: new Date().toISOString()
         } : rule);
+        for (const rule of candidate.rules) if (!config.rules.some((current) => current.id === rule.id) && config.sync.tombstones?.[rule.sync?.id]) recreatedRules.push(structuredClone(rule));
         return candidate;
-      });
+      }); }
+      finally { applyingCloudRules = false; }
+      for (const rule of recreatedRules) await writeCloudRule(rule.sync.id, activeCloudRecord(rule));
+      await reconcileRulesWithCloud();
     });
     activeTab = (await chrome.tabs.query({ active: true, windowId: entry.sourceWindowId }))[0] ?? null;
     if (activeTab?.id === entry.sourceId) await applyForTab(source);
@@ -969,7 +1001,7 @@ async function dispatchAction(message, sender, registry) {
     }
     return { url: entry.url, rules: matchingRulesForUrl(entry.url, config), ownsEditor: registry.owner === entryId,
       writable: registry.owner === entryId && sourceValid && config.global.enabled,
-      hasOwner: registry.owner !== null, sourceValid, enabled: config.global.enabled, syncEnabled: config.global.syncRules };
+      hasOwner: registry.owner !== null, sourceValid, enabled: config.global.enabled, syncEnabled: config.global.syncRules, clientId: config.sync.clientId };
   }
   if (message.type === "prepare-site-rule") requireEditorOwner(registry, message);
   if (message.type === "get-diagnostics") {
@@ -980,8 +1012,12 @@ async function dispatchAction(message, sender, registry) {
       diagnosticLevel: config.global.diagnosticLevel,
       rulesSync: {
         enabled: config.global.syncRules,
+        extensionId: chrome.runtime.id ?? "—",
         clientId: config.sync.clientId,
         clientIdCompact: abbreviateOpaqueId(config.sync.clientId),
+        storageSyncAvailable: Boolean(chrome.storage.sync),
+        visibility: chrome.storage.sync ? await readVisibleCloudRules().then((visible) => visible.counts).catch((error) => ({ error: error.message })) : null,
+        lastResult: await readSession("rulesSyncLastResult"),
         rules: await Promise.all(config.rules.map(async (rule) => ({
           id: rule.id,
           canonicalRuleIdentity: canonicalMatchKey(rule.scope),
@@ -1003,6 +1039,10 @@ async function dispatchAction(message, sender, registry) {
     try { await updateConfig((current) => ({ ...current, rules: current.rules.map((candidate) => candidate.id === rule.id ? applyCloudDefinition(candidate, cloud) : candidate) })); }
     finally { applyingCloudRules = false; }
     return { ok: true };
+  }
+  if (message.type === "sync-rules-now") {
+    const result = await reconcileRulesWithCloud(true);
+    return { ok: true, result, config: await loadConfig() };
   }
   if (message.type === "set-sync-seed-size") {
     const config = await loadConfig();
@@ -1042,7 +1082,9 @@ async function dispatchAction(message, sender, registry) {
   }
   if (["save-global-settings", "delete-rule", "set-rule-enabled", "import-configuration", "reset-configuration"].includes(message.type)) {
     if (message.type !== "save-global-settings" && registry.owner !== null) throw new Error("Close the editable rule dialog before deleting, importing, or resetting rules.");
+    const previous = await loadConfig();
     const config = await updateConfig((current) => applyConfigurationAction(current, message));
+    if (message.type === "save-global-settings" && !previous.global.syncRules && config.global.syncRules) await reconcileRulesWithCloud();
     return { ok: true, config };
   }
   if (message.type === "open-about") {
@@ -1175,6 +1217,7 @@ async function dispatchAction(message, sender, registry) {
     const value = existing?.scope.type === type ? existing.scope.value : scopeForUrl(tab.url, type);
     const display = await displayForRule(null, current);
     const scope = { type, value };
+    if (findActiveRuleByCanonicalIdentity(config.rules, scope, existing?.id)) throw new Error("An active rule for this effective scope already exists.");
     const syncId = await syncRuleIdForScope(scope);
     const now = new Date().toISOString();
     const stagedRule = { id: existing?.id ?? createRuleId(), scope, enabled: message.enabled !== false,

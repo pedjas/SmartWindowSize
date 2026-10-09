@@ -48,6 +48,21 @@ test("Options exposes a full, copyable client identity and keeps environment dat
   assert.match(source, /element\.textContent = client/);
   assert.match(source, /navigator\.clipboard\.writeText\(config\.sync\?\.clientId/);
   assert.match(source, /environment-sync-log/);
+  assert.match(source, /Extension ID: \$\{sync\.extensionId \?\? "—"\}/);
+  assert.match(source, /Client ID: \$\{sync\.clientId \?\? "—"\}/);
+  assert.match(source, /formatClientIdForDisplay\(rule\.sync\?\.modifiedByClientId, sync\.clientId\)/);
+  assert.match(source, /formatClientIdForDisplay\(rule\.sync\?\.modifiedByClientId, config\.sync\?\.clientId\)/);
+});
+
+test("all human-readable Modified by fields use the shared local-client attribution helper", async () => {
+  const [options, editor, worker] = await Promise.all([
+    readFile(new URL("../options/options.js", import.meta.url), "utf8"),
+    readFile(new URL("../rule-delete/rule-delete.js", import.meta.url), "utf8"),
+    readFile(new URL("../background/service-worker.js", import.meta.url), "utf8")
+  ]);
+  for (const source of [options, editor]) assert.match(source, /formatClientIdForDisplay.*core\/client-id-presentation\.js/);
+  assert.match(editor, /formatClientIdForDisplay\(rule\.sync\?\.modifiedByClientId, state\.clientId\)/);
+  assert.match(worker, /syncEnabled: config\.global\.syncRules, clientId: config\.sync\.clientId/);
 });
 
 test("all rule presentation surfaces import the shared rule-type labels", async () => {
@@ -58,6 +73,13 @@ test("all rule presentation surfaces import the shared rule-type labels", async 
   ]);
   for (const source of [popup, options, editor]) assert.match(source, /RULE_TYPE_LABELS.*core\/rule-types\.js/);
   assert.doesNotMatch(popup, /domain_exact: "This domain only"/);
+});
+
+test("Rules cards distinguish local, legacy, and received-from-sync lineage", async () => {
+  const source = await readFile(new URL("../options/options.js", import.meta.url), "utf8");
+  assert.match(source, /Migrated from previous version/);
+  assert.match(source, /Received from sync/);
+  assert.match(source, /Created locally/);
 });
 
 test("popup Active rule shows shared labels and only the canonical scope value", async () => {

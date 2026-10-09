@@ -21,6 +21,21 @@ export async function readCloudRule(syncRuleId) {
   return validDefinition(value.definition) ? value : null;
 }
 
+/** Reads valid SmartWindowSize records currently visible in storage.sync. @returns {Promise<{records: Map<string, object>, counts: object}>} Records and visibility counts. */
+export async function readVisibleCloudRules() {
+  const values = await chrome.storage.sync.get(null);
+  const records = new Map();
+  const counts = { active: 0, status: 0, tombstones: 0, malformed: 0 };
+  for (const [key, value] of Object.entries(values)) {
+    if (!key.startsWith(SYNC_KEY_PREFIX)) continue;
+    const id = key.slice(SYNC_KEY_PREFIX.length);
+    if (!/^[0-9a-f]{32}$/.test(id) || !value || typeof value !== "object" || !validStatus(value.status) || (!value.status.deleted && !validDefinition(value.definition))) { counts.malformed++; continue; }
+    records.set(id, value); counts.status++;
+    if (value.status.deleted) counts.tombstones++; else counts.active++;
+  }
+  return { records, counts };
+}
+
 
 /** Checks revision metadata shared by active records and tombstones. @param {unknown} status Candidate record status. @returns {boolean} Whether the status is safe to reconcile. */
 function validStatus(status) {
@@ -47,7 +62,7 @@ export async function writeCloudRule(syncRuleId, record) {
 
 /** Builds the active cloud representation of a local sync-aware rule. @param {object} rule Local rule. @returns {object} Cloud record. */
 export function activeCloudRecord(rule) {
-  return { status: { revision: rule.sync.revision, modifiedAt: rule.sync.modifiedAt, modifiedByClientId: rule.sync.modifiedByClientId, origin: rule.sync.origin, deleted: false }, definition: cloudRuleDefinition(rule) };
+  return { status: { revision: rule.sync.revision, modifiedAt: rule.sync.modifiedAt, modifiedByClientId: rule.sync.modifiedByClientId, origin: rule.sync.origin === "legacy" ? "legacy" : "user", deleted: false }, definition: cloudRuleDefinition(rule) };
 }
 
 
@@ -64,6 +79,35 @@ export function sameSemanticDefinition(left, right) {
 }
 
 
+/** Explicit outcomes for arbitration of two states with the same deterministic sync identity. @readonly @enum {string} */
+export const SYNC_STATE_ORDER = Object.freeze({ LOCAL_WINS: "local-wins", CLOUD_WINS: "cloud-wins", EQUIVALENT: "equivalent", CONFLICT: "conflict" });
+
+
+/**
+ * Compares the semantic status of two records for one deterministic sync identity.
+ * Revision is always the primary order. A timestamp is considered only for an
+ * equal-revision disagreement made by two identified, different clients.
+ *
+ * @param {object} local Local active or tombstone cloud-shaped record.
+ * @param {object} cloud Cloud active or tombstone record.
+ * @returns {string} One SYNC_STATE_ORDER value.
+ */
+export function compareSyncStates(local, cloud) {
+  const localStatus = local.status;
+  const cloudStatus = cloud.status;
+  if (localStatus.revision > cloudStatus.revision) return SYNC_STATE_ORDER.LOCAL_WINS;
+  if (cloudStatus.revision > localStatus.revision) return SYNC_STATE_ORDER.CLOUD_WINS;
+  const bothDeleted = localStatus.deleted && cloudStatus.deleted;
+  const bothEquivalentActive = !localStatus.deleted && !cloudStatus.deleted && sameSemanticDefinition(local.definition, cloud.definition);
+  if (bothDeleted || bothEquivalentActive) return SYNC_STATE_ORDER.EQUIVALENT;
+  if (typeof localStatus.modifiedByClientId !== "string" || typeof cloudStatus.modifiedByClientId !== "string" || localStatus.modifiedByClientId === cloudStatus.modifiedByClientId) return SYNC_STATE_ORDER.CONFLICT;
+  const localTimestamp = Date.parse(localStatus.modifiedAt ?? "");
+  const cloudTimestamp = Date.parse(cloudStatus.modifiedAt ?? "");
+  if (Number.isNaN(localTimestamp) || Number.isNaN(cloudTimestamp) || localTimestamp === cloudTimestamp) return SYNC_STATE_ORDER.CONFLICT;
+  return localTimestamp > cloudTimestamp ? SYNC_STATE_ORDER.LOCAL_WINS : SYNC_STATE_ORDER.CLOUD_WINS;
+}
+
+
 /** Applies a cloud definition while retaining all machine-local behavior. @param {object} local Existing local rule. @param {object} cloud Cloud record. @returns {object} Updated local rule. */
 export function applyCloudDefinition(local, cloud) {
   const definition = cloud.definition;
@@ -72,6 +116,6 @@ export function applyCloudDefinition(local, cloud) {
     scope: structuredClone(definition.scope),
     position: definition.rememberPosition ? local.position : { enabled: false, x: null, y: null },
     display: definition.rememberMonitor ? local.display : { enabled: false, id: null },
-    sync: { ...local.sync, revision: cloud.status.revision, modifiedAt: cloud.status.modifiedAt, modifiedByClientId: cloud.status.modifiedByClientId, origin: "user", conflict: null }
+    sync: { ...local.sync, revision: cloud.status.revision, modifiedAt: cloud.status.modifiedAt, modifiedByClientId: cloud.status.modifiedByClientId, conflict: null }
   };
 }

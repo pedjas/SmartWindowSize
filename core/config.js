@@ -3,6 +3,7 @@
  * Storage helpers use this module to create and normalize the local schema.
  */
 import { canonicalizeScopeValue } from "./rule-matcher.js";
+import { findActiveRuleByCanonicalIdentity } from "./rule-sync.js";
 
 /**
  * A canonical target matched against a tab URL.
@@ -182,7 +183,7 @@ function normalizeRuleSync(value) {
     revision: Number.isInteger(value.revision) && value.revision > 0 ? value.revision : 1,
     modifiedAt: typeof value.modifiedAt === "string" && !Number.isNaN(Date.parse(value.modifiedAt)) ? value.modifiedAt : null,
     modifiedByClientId: typeof value.modifiedByClientId === "string" && value.modifiedByClientId ? value.modifiedByClientId : null,
-    origin: value.origin === "user" ? "user" : "legacy",
+    origin: value.origin === "user" || value.origin === "sync" ? value.origin : "legacy",
     conflict: value.conflict && typeof value.conflict === "object" ? structuredClone(value.conflict) : null
   };
 }
@@ -222,20 +223,19 @@ export function validateConfigImport(input) {
   }
   if ("ruleRetentionDays" in input.global && ![-1, 90, 180, 365, 730].includes(input.global.ruleRetentionDays)) throw new Error("Invalid rule retention period.");
   const ids = new Set();
-  const scopes = new Set();
+  const activeRules = [];
   for (const rule of input.rules) {
     if (!isValidRule(rule) || typeof rule.id !== "string" || !rule.id || ids.has(rule.id)) throw new Error("Invalid or duplicate rule identifier.");
     const type = normalizeScopeType(rule.scope.type);
     const value = rule.scope.value;
     const canonical = canonicalizeScopeValue(type, value);
-    const key = `${type}:${value}`;
-    if (canonical !== value || scopes.has(key)) throw new Error("Invalid or duplicate rule coverage.");
+    if (canonical !== value || findActiveRuleByCanonicalIdentity(activeRules, { type, value })) throw new Error("Invalid or duplicate rule coverage.");
     if (typeof rule.enabled !== "boolean" || typeof rule.position?.enabled !== "boolean" || typeof rule.display?.enabled !== "boolean") throw new Error("Invalid rule switches.");
     if (rule.position.enabled && ![rule.position.x, rule.position.y].every(Number.isInteger)) throw new Error("Invalid rule position.");
     if (rule.display.enabled && (typeof rule.display.id !== "string" || !rule.display.id)) throw new Error("Invalid rule display.");
     if (rule.lastUpdatedAt !== undefined && (typeof rule.lastUpdatedAt !== "string" || Number.isNaN(Date.parse(rule.lastUpdatedAt)))) throw new Error("Invalid rule timestamp.");
     ids.add(rule.id);
-    scopes.add(key);
+    activeRules.push(rule);
   }
   return normalizeConfig(input);
 }
