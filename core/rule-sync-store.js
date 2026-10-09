@@ -72,6 +72,35 @@ export function deletedCloudRecord(tombstone) {
 }
 
 
+/** Projects an authoritative cloud active record into a newly created local rule without importing machine-specific state. @param {string} syncRuleId Deterministic rule identity. @param {object} cloud Valid active cloud record. @param {string} localRuleId New local opaque rule identifier. @param {string} lastUpdatedAt Local creation timestamp. @returns {object} New local sync-origin rule. */
+export function localRuleFromCloudRecord(syncRuleId, cloud, localRuleId, lastUpdatedAt) {
+  return {
+    id: localRuleId,
+    scope: structuredClone(cloud.definition.scope),
+    enabled: true,
+    width: cloud.definition.seedWidth,
+    height: cloud.definition.seedHeight,
+    position: { enabled: false, x: null, y: null },
+    display: { enabled: false, id: null },
+    lastUpdatedAt,
+    sync: {
+      id: syncRuleId,
+      revision: cloud.status.revision,
+      modifiedAt: cloud.status.modifiedAt,
+      modifiedByClientId: cloud.status.modifiedByClientId,
+      origin: "sync",
+      conflict: null
+    }
+  };
+}
+
+
+/** Projects an authoritative cloud deletion status into persistent local sync-index metadata. @param {string} syncRuleId Deterministic rule identity. @param {object} status Valid deleted cloud status. @returns {object} Local deletion metadata. */
+export function localTombstoneFromCloudStatus(syncRuleId, status) {
+  return { id: syncRuleId, revision: status.revision, modifiedAt: status.modifiedAt, modifiedByClientId: status.modifiedByClientId, deleted: true };
+}
+
+
 /** Compares semantic cloud definitions without considering seed dimensions. @param {object} left Cloud definition. @param {object} right Cloud definition. @returns {boolean} Whether the semantic behavior is equivalent. */
 export function sameSemanticDefinition(left, right) {
   return left?.scope?.type === right?.scope?.type && left?.scope?.value === right?.scope?.value &&

@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## 1.1.19 - 2026-10-09
+
+- Refine Rules-card scanning with a prominent site/scope value, compact type
+  header, top-aligned normal and Sync detail fields, softer secondary values,
+  and quieter unboxed Effective scope.
+- Show received-from-sync rule lineage consistently in Set rules and
+  Configuration details.
+- Centralize cloud-to-local active-rule and tombstone projections so
+  reconciliation paths preserve the same local sync state.
+
 ## 1.1.13 - 2026-10-09
 
 - Improve release preflight diagnostics with actionable working-tree, branch

@@ -14,6 +14,7 @@ import { RULE_TYPE_LABELS, RULE_TYPE_DESCRIPTORS } from "../core/rule-types.js";
 import { fingerprint } from "../core/configuration-actions.js";
 import { windowBoundsChanged } from "../core/window-bounds.js";
 import { formatClientIdForDisplay } from "../core/client-id-presentation.js";
+import { originLabel } from "../core/rule-presentation.js";
 
 
 /** Loads an ESM script without imports for dependency-injected VM execution. @param {string} path Project-relative script path. @returns {Promise<string>} Executable script body. */
@@ -141,7 +142,7 @@ async function ruleEditorFixture(access = {}) {
   let onMessage;
   let confirmations = 0;
   const context = vm.createContext({
-    APP_VERSION: "test", SCOPE_PRIORITY, RULE_TYPE_LABELS, scopeForUrl, canonicalMatchKey, canonicalMatchKeyForUrl, findActiveRuleByCanonicalIdentity, matchingRulesForUrl, resolveRule, formatClientIdForDisplay, URL, structuredClone, crypto: { randomUUID: () => "test-id" },
+    APP_VERSION: "test", SCOPE_PRIORITY, RULE_TYPE_LABELS, scopeForUrl, canonicalMatchKey, canonicalMatchKeyForUrl, findActiveRuleByCanonicalIdentity, matchingRulesForUrl, resolveRule, formatClientIdForDisplay, originLabel, URL, structuredClone, crypto: { randomUUID: () => "test-id" },
     installClientErrors: () => {}, runClientAction: async (_operation, action) => action(),
     request: async (message) => {
       requests.push(message);
@@ -234,6 +235,19 @@ test("editing a synchronized rule shows only concise status and preserves its id
   fixture.controls.get("selected-scope").listeners.change();
   assert.equal(fixture.state().rules[0].sync.id, id);
   assert.equal(fixture.requests.filter((request) => request.type === "prepare-site-rule").length, 0);
+});
+
+
+test("Set rules preserves received-from-sync lineage after a local semantic edit", async () => {
+  const synced = { ...fixtureRule(), sync: { id: "0123456789abcdef0123456789abcdef", revision: 4, modifiedAt: "2026-10-09T12:00:00.000Z", modifiedByClientId: "client-b", origin: "sync", conflict: null } };
+  const fixture = await ruleEditorFixture({ rule: synced, syncEnabled: true, clientId: "client-a" });
+  const details = fixture.controls.get("rules").children[0].children[0];
+  const inspect = details.children.find((item) => item.className === "rule-inspect-details");
+  const metadata = inspect.children[1];
+  assert.match(metadata.textContent, /Origin: Received from sync/);
+  assert.match(metadata.textContent, /Modified by: client-b/);
+  fixture.edit(synced);
+  assert.equal(fixture.state().rules[0].sync.origin, "sync");
 });
 
 

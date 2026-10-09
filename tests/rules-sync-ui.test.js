@@ -3,18 +3,34 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { canonicalizeScopeValue } from "../core/rule-matcher.js";
+import { originLabel } from "../core/rule-presentation.js";
 import { RULE_TYPE_LABELS } from "../core/rule-types.js";
 
 
 test("Rules cards show matcher-derived effective scope and keep technical sync details separate", async () => {
-  const source = await readFile(new URL("../options/options.js", import.meta.url), "utf8");
+  const [source, styles] = await Promise.all([
+    readFile(new URL("../options/options.js", import.meta.url), "utf8"),
+    readFile(new URL("../options/options.css", import.meta.url), "utf8")
+  ]);
   assert.match(source, /canonicalMatchKey.*from "\.\.\/core\/rule-sync\.js"/);
+  assert.match(source, /scope\.textContent = RULE_TYPE_LABELS\[rule\.scope\.type\]/);
+  assert.match(source, /value\.textContent = rule\.scope\.value/);
   assert.match(source, /const effectiveScope = canonicalMatchKey\(rule\.scope\)/);
   assert.match(source, /createRuleDetail\("Effective scope", effectiveScope/);
   assert.match(source, /summary\.textContent = "Sync details"/);
   assert.match(source, /refresh\.append\(materialIcon\("refresh"\), "Refresh from cloud"\)/);
   assert.match(source, /actions\.append\(toggle, remove, refresh\)/);
   assert.doesNotMatch(source, /seed\.textContent = "Set current size as synced default"/);
+  assert.match(styles, /\.rule-card-value \{ margin: 0; font-size: 18px; font-weight: 700; line-height: 1;/);
+  assert.match(styles, /\.rule-card h3 \{ margin: 0; font-size: 14px; font-weight: 500;/);
+  assert.match(styles, /\.rule-card-header \+ \.rule-card-value \{ margin-top: -8px; \}/);
+  assert.match(styles, /\.rule-card-details \{ display: grid; grid-template-columns: repeat\(auto-fit, minmax\(145px, 1fr\)\); align-items: start; gap: 8px 16px; \}/);
+  assert.match(styles, /\.sync-details-grid \{ display: grid; grid-template-columns: minmax\(320px, 2fr\) repeat\(2, minmax\(150px, 1fr\)\); align-items: start; gap: 8px 16px; overflow-wrap: anywhere; \}/);
+  assert.match(styles, /\.rule-card-details strong \{ white-space: pre-line; font-weight: 500; \}/);
+  assert.match(styles, /\.effective-scope \{ overflow-wrap: anywhere; \}/);
+  assert.match(styles, /\.effective-scope strong \{ font-weight: 500; \}/);
+  assert.doesNotMatch(styles, /\.effective-scope \{[^}]*border-left/);
+  assert.doesNotMatch(styles, /\.effective-scope \{[^}]*background/);
 });
 
 
@@ -76,10 +92,16 @@ test("all rule presentation surfaces import the shared rule-type labels", async 
 });
 
 test("Rules cards distinguish local, legacy, and received-from-sync lineage", async () => {
-  const source = await readFile(new URL("../options/options.js", import.meta.url), "utf8");
-  assert.match(source, /Migrated from previous version/);
-  assert.match(source, /Received from sync/);
-  assert.match(source, /Created locally/);
+  const [options, editor] = await Promise.all([
+    readFile(new URL("../options/options.js", import.meta.url), "utf8"),
+    readFile(new URL("../rule-delete/rule-delete.js", import.meta.url), "utf8")
+  ]);
+  assert.equal(originLabel("legacy"), "Migrated from previous version");
+  assert.equal(originLabel("sync"), "Received from sync");
+  assert.equal(originLabel("user"), "Created locally");
+  for (const source of [options, editor]) assert.match(source, /originLabel.*core\/rule-presentation\.js/);
+  assert.match(options, /createRuleDetail\("Origin", originLabel\(rule\.sync\?\.origin\)\)/);
+  assert.match(editor, /Origin: \$\{originLabel\(rule\.sync\?\.origin\)\}/);
 });
 
 test("popup Active rule shows shared labels and only the canonical scope value", async () => {

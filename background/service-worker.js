@@ -1,5 +1,5 @@
 /**
- * SmartWindowSize | Version: 1.1.13 | Last updated: 2026-10-09 00:00:00 +02:00
+ * SmartWindowSize | Version: 1.1.19 | Last updated: 2026-10-09 00:00:00 +02:00
  *
  * Coordinates serialized window operations, validated configuration writes,
  * unique dialogs, and session diagnostics.
@@ -19,7 +19,7 @@ import { canonicalMatchKey, abbreviateOpaqueId, findActiveRuleByCanonicalIdentit
 import { clearDiagnostics, loadDiagnostics, recordDiagnostic, recordDiagnosticEvent } from "../core/diagnostics.js";
 import { readSession, writeSession, removeSession } from "../core/runtime-session.js";
 import { getTabIfExists, isMissingTabError } from "../core/tab-lifecycle.js";
-import { activeCloudRecord, applyCloudDefinition, compareSyncStates, deletedCloudRecord, readCloudRule, readVisibleCloudRules, SYNC_STATE_ORDER, writeCloudRule } from "../core/rule-sync-store.js";
+import { activeCloudRecord, applyCloudDefinition, compareSyncStates, deletedCloudRecord, localRuleFromCloudRecord, localTombstoneFromCloudStatus, readCloudRule, readVisibleCloudRules, SYNC_STATE_ORDER, writeCloudRule } from "../core/rule-sync-store.js";
 
 /** Per-window operation chains prevent rule application and persistence races. @type {Map<number, Promise<unknown>>} */
 const windowQueues = new Map();
@@ -113,7 +113,7 @@ function reconcileRulesWithCloud(manual = false) {
       if (order === SYNC_STATE_ORDER.CLOUD_WINS) {
         if (cloud.status.deleted) {
           removals.add(rule.id);
-          adoptedTombstones.set(rule.sync.id, { id: rule.sync.id, revision: cloud.status.revision, modifiedAt: cloud.status.modifiedAt, modifiedByClientId: cloud.status.modifiedByClientId, deleted: true });
+          adoptedTombstones.set(rule.sync.id, localTombstoneFromCloudStatus(rule.sync.id, cloud.status));
           result.deleted++;
         }
         else { replacements.set(rule.id, applyCloudDefinition(rule, cloud)); result.received++; }
@@ -129,10 +129,10 @@ function reconcileRulesWithCloud(manual = false) {
       if (!cloud) { await writeCloudRule(tombstone.id, local); result.uploaded++; continue; }
       const order = compareSyncStates(local, cloud);
       if (order === SYNC_STATE_ORDER.CLOUD_WINS) {
-        if (cloud.status.deleted) adoptedTombstones.set(tombstone.id, { id: tombstone.id, revision: cloud.status.revision, modifiedAt: cloud.status.modifiedAt, modifiedByClientId: cloud.status.modifiedByClientId, deleted: true });
+        if (cloud.status.deleted) adoptedTombstones.set(tombstone.id, localTombstoneFromCloudStatus(tombstone.id, cloud.status));
         else if (await syncRuleIdForScope(cloud.definition.scope) === tombstone.id) {
           clearedTombstones.add(tombstone.id);
-          additions.push({ id: createRuleId(), scope: structuredClone(cloud.definition.scope), enabled: true, width: cloud.definition.seedWidth, height: cloud.definition.seedHeight, position: { enabled: false, x: null, y: null }, display: { enabled: false, id: null }, lastUpdatedAt: new Date().toISOString(), sync: { id: tombstone.id, revision: cloud.status.revision, modifiedAt: cloud.status.modifiedAt, modifiedByClientId: cloud.status.modifiedByClientId, origin: "sync", conflict: null } }); result.received++;
+          additions.push(localRuleFromCloudRecord(tombstone.id, cloud, createRuleId(), new Date().toISOString())); result.received++;
         }
         continue;
       }
@@ -140,7 +140,7 @@ function reconcileRulesWithCloud(manual = false) {
       if (order === SYNC_STATE_ORDER.CONFLICT) { result.conflicts++; await recordDiagnosticEvent("Rules Sync conflict", "Equal-revision local tombstone and cloud active state could not be ordered.", { syncRuleId: tombstone.id, local: tombstone, cloud: cloud.status }); }
     }
     for (const [id, cloud] of visible.records) if (!seen.has(id) && !cloud.status.deleted && await syncRuleIdForScope(cloud.definition.scope) === id) {
-      additions.push({ id: createRuleId(), scope: structuredClone(cloud.definition.scope), enabled: true, width: cloud.definition.seedWidth, height: cloud.definition.seedHeight, position: { enabled: false, x: null, y: null }, display: { enabled: false, id: null }, lastUpdatedAt: new Date().toISOString(), sync: { id, revision: cloud.status.revision, modifiedAt: cloud.status.modifiedAt, modifiedByClientId: cloud.status.modifiedByClientId, origin: "sync", conflict: null } }); result.received++;
+      additions.push(localRuleFromCloudRecord(id, cloud, createRuleId(), new Date().toISOString())); result.received++;
     }
     if (removals.size || replacements.size || additions.length || clearedTombstones.size || adoptedTombstones.size) {
       applyingCloudRules = true;

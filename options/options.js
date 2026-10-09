@@ -3,6 +3,7 @@ import { APP_VERSION } from "../core/app-version.js";
 import { WINDOW_PRESETS, findHorizontalPresetIndex, orientedPresetSize } from "../core/window-presets.js";
 import { request, installClientErrors, runClientAction, showClientError } from "../core/client.js";
 import { formatClientIdForDisplay } from "../core/client-id-presentation.js";
+import { originLabel } from "../core/rule-presentation.js";
 import { canonicalMatchKey } from "../core/rule-sync.js";
 import { RULE_TYPE_LABELS } from "../core/rule-types.js";
 
@@ -92,7 +93,7 @@ async function renderDiagnostics() {
 
 /** Formats inspectable Rules Sync identity metadata for copyable local diagnostics. @param {object} sync Rules Sync diagnostic snapshot. @returns {string} Diagnostic text. */
 function formatRulesSyncDiagnostics(sync) {
-  const rules = sync.rules.map((rule) => `Rule: ${rule.id}\nEffective scope: ${rule.canonicalRuleIdentity}\nSync Rule ID: ${rule.sync?.id ?? "—"}\nRevision: ${rule.sync?.revision ?? "—"}\nModified: ${rule.sync?.modifiedAt ?? "legacy/unordered"}\nModified by: ${formatClientIdForDisplay(rule.sync?.modifiedByClientId, sync.clientId)}\nOrigin: ${rule.sync?.origin ?? "—"}\nConflict: ${JSON.stringify(rule.sync?.conflict ?? null)}\nCloud record: ${JSON.stringify(rule.cloud ?? "not checked", null, 2)}`).join("\n\n");
+  const rules = sync.rules.map((rule) => `Rule: ${rule.id}\nEffective scope: ${rule.canonicalRuleIdentity}\nSync Rule ID: ${rule.sync?.id ?? "—"}\nRevision: ${rule.sync?.revision ?? "—"}\nModified: ${rule.sync?.modifiedAt ?? "legacy/unordered"}\nModified by: ${formatClientIdForDisplay(rule.sync?.modifiedByClientId, sync.clientId)}\nOrigin: ${originLabel(rule.sync?.origin)}\nConflict: ${JSON.stringify(rule.sync?.conflict ?? null)}\nCloud record: ${JSON.stringify(rule.cloud ?? "not checked", null, 2)}`).join("\n\n");
   const visible = sync.visibility && !sync.visibility.error ? `Visible cloud active rules: ${sync.visibility.active}\nVisible cloud status records: ${sync.visibility.status}\nVisible cloud tombstones: ${sync.visibility.tombstones}` : "Visible cloud records: unavailable";
   const last = sync.lastResult ? `\nLast sync: received ${sync.lastResult.received}, uploaded ${sync.lastResult.uploaded}, deleted ${sync.lastResult.deleted}, conflicts ${sync.lastResult.conflicts}` : "";
   return `Rules Sync\nEnabled: ${sync.enabled ? "Yes" : "No"}\nstorage.sync available: ${sync.storageSyncAvailable ? "Yes" : "No"}\nExtension ID: ${sync.extensionId ?? "—"}\nClient ID: ${sync.clientId ?? "—"}\n${visible}${last}\nIdentity algorithm: SHA-256(Effective scope), first 128 bits\n\n${rules || "No saved rules."}\n\nTombstones:\n${JSON.stringify(sync.tombstones, null, 2)}`;
@@ -251,14 +252,6 @@ function formatLocalDateTime(value) {
   if (typeof value !== "string" || Number.isNaN(Date.parse(value))) return "Legacy migration (unordered)";
   const date = new Date(value);
   return `${date.toLocaleDateString()}\n${date.toLocaleTimeString()}`;
-}
-
-
-/** Returns a user-facing description of a rule's local provenance. @param {string|undefined} origin Stored origin marker. @returns {string} Readable origin. */
-function originLabel(origin) {
-  if (origin === "legacy") return "Migrated from previous version";
-  if (origin === "sync") return "Received from sync";
-  return "Created locally";
 }
 
 

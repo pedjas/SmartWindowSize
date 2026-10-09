@@ -8,7 +8,7 @@ globalThis.chrome = { storage: { sync: {
   async set(values) { Object.assign(cloud, structuredClone(values)); }
 } } };
 
-const { activeCloudRecord, applyCloudDefinition, compareSyncStates, readCloudRule, SYNC_STATE_ORDER, writeCloudRule } = await import("../core/rule-sync-store.js");
+const { activeCloudRecord, applyCloudDefinition, compareSyncStates, localRuleFromCloudRecord, localTombstoneFromCloudStatus, readCloudRule, SYNC_STATE_ORDER, writeCloudRule } = await import("../core/rule-sync-store.js");
 
 /** Builds one minimal active or deleted state for comparator cases. @param {object} overrides State changes. @returns {object} Cloud-shaped state. */
 function syncState(overrides = {}) {
@@ -58,4 +58,16 @@ test("received-from-sync lineage remains local while later cloud revisions prese
   assert.equal(applied.sync.origin, "sync");
   assert.equal(applied.sync.modifiedByClientId, "client-b");
   assert.equal(applied.width, 800);
+});
+
+test("cloud projections create only the intended local active rule and deletion index fields", () => {
+  const cloud = syncState({ status: { revision: 7, modifiedAt: "2026-10-09T12:00:00.000Z", modifiedByClientId: "client-a" }, definition: { rememberPosition: true, rememberMonitor: true, seedWidth: 1234, seedHeight: 876 } });
+  const local = localRuleFromCloudRecord("a".repeat(32), cloud, "local-rule", "2026-10-09T12:01:00.000Z");
+  assert.deepEqual(local, {
+    id: "local-rule", scope: { type: "domain_tree", value: "example.com" }, enabled: true, width: 1234, height: 876,
+    position: { enabled: false, x: null, y: null }, display: { enabled: false, id: null }, lastUpdatedAt: "2026-10-09T12:01:00.000Z",
+    sync: { id: "a".repeat(32), revision: 7, modifiedAt: "2026-10-09T12:00:00.000Z", modifiedByClientId: "client-a", origin: "sync", conflict: null }
+  });
+  const deleted = localTombstoneFromCloudStatus("a".repeat(32), { revision: 8, modifiedAt: "2026-10-09T12:02:00.000Z", modifiedByClientId: "client-b", deleted: true });
+  assert.deepEqual(deleted, { id: "a".repeat(32), revision: 8, modifiedAt: "2026-10-09T12:02:00.000Z", modifiedByClientId: "client-b", deleted: true });
 });
