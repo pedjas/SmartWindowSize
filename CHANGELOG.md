@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 1.2.0 - 2026-10-10
+
+- Start the 1.2 development and release cycle.
+
 ## 1.1.25 - 2026-10-10
 
 ### Rules semantic architecture
