@@ -53,3 +53,11 @@ export function orientedPresetSize(preset, vertical) {
 export function findHorizontalPresetIndex(width, height) {
   return WINDOW_PRESETS.findIndex((preset) => preset.width === width && preset.height === height);
 }
+
+/** Returns the shared preset-or-Custom selection for a pair of outer dimensions. @param {number} width Width. @param {number} height Height. @returns {{index: number, vertical: boolean}} Matching preset state, or Custom with index -1. */
+export function presetSelectionForSize(width, height) {
+  const horizontal = findHorizontalPresetIndex(width, height);
+  if (horizontal >= 0) return { index: horizontal, vertical: false };
+  const vertical = findHorizontalPresetIndex(height, width);
+  return vertical >= 0 ? { index: vertical, vertical: true } : { index: -1, vertical: false };
+}

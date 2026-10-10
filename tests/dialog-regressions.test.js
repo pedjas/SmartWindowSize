@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
-import { WINDOW_PRESETS, findHorizontalPresetIndex, orientedPresetSize } from "../core/window-presets.js";
+import { WINDOW_PRESETS, findHorizontalPresetIndex, orientedPresetSize, presetSelectionForSize } from "../core/window-presets.js";
 import { createContextMenus, refreshSiteRuleMenu, registerContextMenuActions } from "../context/context-menus.js";
 import { createDefaultConfig } from "../core/config.js";
 
@@ -26,7 +26,7 @@ async function openSizeDialog(initialCurrent, currentOnRequest = initialCurrent)
   });
   const source = (await readFile(new URL("../size-picker/size-picker.js", import.meta.url), "utf8")).replace(/^import .*;\r?$/gm, "");
   vm.runInNewContext(source, {
-    APP_VERSION: "test", WINDOW_PRESETS, findHorizontalPresetIndex, orientedPresetSize,
+    APP_VERSION: "test", WINDOW_PRESETS, findHorizontalPresetIndex, orientedPresetSize, presetSelectionForSize,
     installClientErrors: () => {}, runClientAction: async (_operation, action) => action(),
     request: async (message) => {
       requests.push(message);

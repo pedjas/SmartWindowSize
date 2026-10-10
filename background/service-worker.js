@@ -1,5 +1,5 @@
 /**
- * SmartWindowSize | Version: 1.2.2 | Last updated: 2026-10-10 08:05:00 +02:00
+ * SmartWindowSize | Version: 1.2.4 | Last updated: 2026-10-10 13:08:28 +02:00
  *
  * Coordinates serialized window operations, validated configuration writes,
  * unique dialogs, and session diagnostics.
@@ -1217,8 +1217,9 @@ async function dispatchAction(message, sender, registry) {
     return { ok: true };
   }
   if (message.type === "get-window-size-limits") {
-    if (!Number.isInteger(message.windowId)) throw new Error("Invalid window identifier.");
-    const current = await chrome.windows.get(message.windowId);
+    const id = message.windowId ?? tab?.windowId;
+    if (!Number.isInteger(id)) throw new Error("Invalid window identifier.");
+    const current = await chrome.windows.get(id);
     return { current, maximum: await maximumManualSizeForWindow(current) };
   }
   if (message.type === "resize-window" || message.type === "bring-window-on-screen") {

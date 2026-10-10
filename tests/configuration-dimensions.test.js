@@ -6,7 +6,7 @@ import vm from "node:vm";
 import { createDefaultConfig } from "../core/config.js";
 import { applyConfigurationAction } from "../core/configuration-actions.js";
 import { resolveRule } from "../core/rule-resolver.js";
-import { WINDOW_PRESETS, orientedPresetSize } from "../core/window-presets.js";
+import { WINDOW_PRESETS, orientedPresetSize, presetSelectionForSize } from "../core/window-presets.js";
 
 
 /** Creates a minimal input with callable browser-event listeners. @returns {object} Input fixture. */
@@ -23,8 +23,9 @@ test("custom dimensions survive checkbox toggles, Save, and fallback resolution"
   form.elements.enabled.checked = true;
   const defaultPreset = input("preset:0");
   let saved;
-  const context = vm.createContext({ form, defaultPreset, defaultVertical: input(), WINDOW_PRESETS, orientedPresetSize,
+  const context = vm.createContext({ form, saveSettingsButton: input("Save settings"), defaultPreset, defaultVertical: input(), useCurrentDefaultSize: input(), WINDOW_PRESETS, orientedPresetSize, presetSelectionForSize,
     globalBase: config.global, formDirty: false, FormData: class { *[Symbol.iterator]() {} },
+    synchronizeCurrentDefaultSizeAction() {}, synchronizeSaveSettingsAvailability() {}, currentGlobalSettings() { return { ...config.global, automaticWidth: Number(form.elements.Width.value), automaticHeight: Number(form.elements.Height.value), useDefaultSize: form.elements.automaticWindowSize.checked }; }, runButtonFeedback() {}, request: async () => ({}),
     mutate(message) { saved = applyConfigurationAction(config, message); } });
   vm.runInContext(source.slice(source.indexOf("function selectedDefaultPreset()"), source.indexOf("/** Builds the shared preset")), context);
   vm.runInContext(source.slice(source.indexOf('defaultPreset.addEventListener("change"'), source.indexOf("/** Creates one labeled detail")), context);

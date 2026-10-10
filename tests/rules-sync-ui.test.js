@@ -54,9 +54,10 @@ test("rule-detail UI keeps monitor state local and uses labelled bundled icon co
 
 
 test("Options exposes a full, copyable client identity and keeps environment data outside the event log", async () => {
-  const [html, source] = await Promise.all([
+  const [html, source, styles] = await Promise.all([
     readFile(new URL("../options/options.html", import.meta.url), "utf8"),
-    readFile(new URL("../options/options.js", import.meta.url), "utf8")
+    readFile(new URL("../options/options.js", import.meta.url), "utf8"),
+    readFile(new URL("../options/options.css", import.meta.url), "utf8")
   ]);
   assert.match(html, /id="client-identity"/);
   assert.match(html, /id="copy-client-id"/);
@@ -72,6 +73,11 @@ test("Options exposes a full, copyable client identity and keeps environment dat
   assert.match(source, /result\.skippedReason === "storage-sync-unavailable" \? "Browser sync storage is unavailable\." : "Sync is disabled\."/);
   assert.match(source, /formatClientIdForDisplay\(rule\.sync\?\.modifiedByClientId, sync\.clientId\)/);
   assert.match(source, /formatClientIdForDisplay\(rule\.sync\?\.modifiedByClientId, config\.sync\?\.clientId\)/);
+  assert.match(html, /<button id="save-settings" type="submit">Save settings<\/button>/);
+  assert.match(source, /button: saveSettingsButton, labels: \{ working: "Saving…", success: "Saved ✓" \}/);
+  assert.match(styles, /button:disabled, button\.compact-secondary:disabled, button\.icon-button:disabled, button\.icon-button\.delete:disabled,/);
+  assert.match(styles, /input:disabled, select:disabled, textarea:disabled/);
+  assert.match(styles, /color: GrayText;/);
 });
 
 test("all human-readable Modified by fields use the shared local-client attribution helper", async () => {

@@ -3,7 +3,7 @@
  * The service worker validates, applies, and persists the submitted size for the target window's active tab.
  */
 import { APP_VERSION } from "../core/app-version.js";
-import { WINDOW_PRESETS, findHorizontalPresetIndex, orientedPresetSize } from "../core/window-presets.js";
+import { WINDOW_PRESETS, orientedPresetSize, presetSelectionForSize } from "../core/window-presets.js";
 import { request, installClientErrors, runClientAction } from "../core/client.js";
 
 
@@ -166,22 +166,12 @@ function updateOrientationAvailability() {
 
 /** Selects the matching preset or Custom from supplied dimensions. @param {{width: number, height: number}} current Candidate target-window outer dimensions. @returns {void} Updates the selection and custom fields. */
 function selectCurrentSize(current) {
-  const horizontalIndex = findHorizontalPresetIndex(current.width, current.height);
-  const verticalIndex = findHorizontalPresetIndex(current.height, current.width);
-  if (horizontalIndex >= 0) {
-    presetInput.value = `preset:${horizontalIndex}`;
-    verticalInput.checked = false;
-  } else if (verticalIndex >= 0) {
-    presetInput.value = `preset:${verticalIndex}`;
-    verticalInput.checked = true;
-  } else {
-    presetInput.value = "custom";
-    verticalInput.checked = false;
-  }
+  const selection = presetSelectionForSize(current.width, current.height);
+  presetInput.value = selection.index >= 0 ? `preset:${selection.index}` : "custom";
+  verticalInput.checked = selection.vertical;
   widthInput.value = String(current.width);
   heightInput.value = String(current.height);
-  const index = horizontalIndex >= 0 ? horizontalIndex : verticalIndex;
-  renderPresets(index >= 0 ? `preset:${index}` : "custom");
+  renderPresets(selection.index >= 0 ? `preset:${selection.index}` : "custom");
 }
 
 

@@ -1,5 +1,20 @@
 # CHANGELOG
 
+## 1.2.4 - 2026-10-10
+
+### Configuration and Rules actions
+
+- Add clear working, success, and disabled visual feedback for Configuration
+  save, reset, and per-rule cloud-refresh actions, while Save Settings is
+  enabled only when its normalized persisted configuration differs from the
+  saved state.
+
+### Default automatic window size
+
+- Let the no-rule automatic-size Configuration use the current browser window
+  size without resizing, saving, or creating a rule, sharing Manual resize
+  preset and Custom selection behavior.
+
 ## 1.2.2 - 2026-10-10
 
 - Refresh Rules Sync Diagnostics after reconciliation and when opened, keeping

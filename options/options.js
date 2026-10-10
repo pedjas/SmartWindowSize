@@ -1,6 +1,6 @@
 import { normalizeConfig } from "../core/config.js";
 import { APP_VERSION } from "../core/app-version.js";
-import { WINDOW_PRESETS, findHorizontalPresetIndex, orientedPresetSize } from "../core/window-presets.js";
+import { WINDOW_PRESETS, findHorizontalPresetIndex, orientedPresetSize, presetSelectionForSize } from "../core/window-presets.js";
 import { request, installClientErrors, runClientAction, showClientError } from "../core/client.js";
 import { formatClientIdForDisplay } from "../core/client-id-presentation.js";
 import { formatRuleSyncStatus, originLabel, ruleSyncStatus } from "../core/rule-presentation.js";
@@ -143,11 +143,53 @@ async function copyDiagnostics() {
 /** Form element that edits global SmartWindowSize settings. @type {HTMLFormElement} */
 const form = document.querySelector("#global");
 
+/** Primary global-settings action with an explicit DOM identity for shared feedback. @type {HTMLButtonElement} */
+const saveSettingsButton = document.querySelector("#save-settings");
+
 /** Shared default-size preset selector. @type {HTMLSelectElement} */
 const defaultPreset = document.querySelector("#default-preset");
 
 /** Orientation of the selected default-size preset. @type {HTMLInputElement} */
 const defaultVertical = document.querySelector("#default-vertical");
+
+/** Secondary Configuration action which adopts the active browser window dimensions without saving them. @type {HTMLButtonElement} */
+const useCurrentDefaultSize = document.querySelector("#use-current-default-size");
+
+/** Last browser-window dimensions read for the fallback-size convenience action. @type {{width:number,height:number}|null} */
+let currentDefaultWindowSize = null;
+
+/** Runs one action button through shared working/success feedback without masking existing errors. @param {HTMLButtonElement} button Action control. @param {{working:string, success:string}} labels Transient labels. @param {Function} action Request work. @returns {Promise<void>} Completion. */
+async function runButtonFeedback(button, labels, action) {
+  if (button.disabled || button.dataset.feedback === "working") return;
+  const idle = button.dataset.idleLabel ?? button.textContent;
+  button.dataset.idleLabel = idle; button.dataset.feedback = "working"; button.disabled = true; button.textContent = labels.working;
+  try {
+    await action();
+    button.textContent = labels.success; button.dataset.feedback = "success";
+    setTimeout(() => { button.textContent = idle; button.dataset.feedback = "idle"; synchronizeDimensionAvailability(); synchronizeCurrentDefaultSizeAction(); }, 1400);
+  } catch (error) {
+    button.textContent = idle; button.dataset.feedback = "idle"; button.disabled = false;
+    await showClientError(idle, error);
+  }
+}
+
+/** Updates the default-size action label and disabled state from its latest browser window reading. @returns {void} */
+function synchronizeCurrentDefaultSizeAction() {
+  if (!currentDefaultWindowSize) return;
+  const label = `Use current window size (${currentDefaultWindowSize.width} × ${currentDefaultWindowSize.height})`;
+  if (useCurrentDefaultSize.dataset.feedback !== "working" && useCurrentDefaultSize.dataset.feedback !== "success") useCurrentDefaultSize.textContent = label;
+  useCurrentDefaultSize.title = label;
+  useCurrentDefaultSize.disabled = !form.elements.automaticWindowSize.checked || Number(form.elements.Width.value) === currentDefaultWindowSize.width && Number(form.elements.Height.value) === currentDefaultWindowSize.height;
+}
+
+/** Selects the common preset-or-Custom representation for default Configuration dimensions. @param {{width:number,height:number}} size Dimensions to display without persisting. @returns {void} */
+function selectDefaultSize(size) {
+  const selection = presetSelectionForSize(size.width, size.height);
+  defaultVertical.checked = selection.vertical;
+  defaultPreset.value = selection.index >= 0 ? `preset:${selection.index}` : "custom";
+  form.elements.Width.value = size.width; form.elements.Height.value = size.height;
+  renderDefaultPresets(false);
+}
 
 
 /** Replaces all form controls after loading, importing, or resetting settings. @returns {void} */
@@ -164,7 +206,27 @@ function renderGlobal() {
   form.elements.automaticWindowSize.checked = config.global.useDefaultSize;
   renderDefaultPresets(true);
   formDirty = false;
+  synchronizeSaveSettingsAvailability();
   renderClientIdentity();
+}
+
+
+/** Builds the normalized persisted-global candidate currently represented by the form. @returns {object} Candidate global settings. */
+function currentGlobalSettings() {
+  const global = { ...globalBase };
+  for (const [key, value] of new FormData(form)) if (key !== "automaticWindowSize") global[key] = ["ruleRetentionDays"].includes(key) ? Number(value) : value;
+  global.automaticWidth = Number(form.elements.Width.value);
+  global.automaticHeight = Number(form.elements.Height.value);
+  global.useDefaultSize = form.elements.automaticWindowSize.checked;
+  for (const name of ["enabled", "rememberMonitor", "syncRules"]) if (form.elements[name]) global[name] = form.elements[name].checked;
+  return normalizeConfig({ ...config, global }).global;
+}
+
+
+/** Enables Save Settings only when the form has a semantic persisted-settings difference. @returns {void} Updates the authoritative dirty snapshot and button state. */
+function synchronizeSaveSettingsAvailability() {
+  formDirty = JSON.stringify(currentGlobalSettings()) !== JSON.stringify(globalBase);
+  if (saveSettingsButton.dataset.feedback !== "working" && saveSettingsButton.dataset.feedback !== "success") saveSettingsButton.disabled = !formDirty;
 }
 
 
@@ -182,6 +244,7 @@ function synchronizeDimensionAvailability() {
   defaultVertical.disabled = !dimensionsEnabled;
   form.elements.Width.disabled = !dimensionsEnabled;
   form.elements.Height.disabled = !dimensionsEnabled;
+  synchronizeCurrentDefaultSizeAction();
 }
 
 
@@ -193,6 +256,7 @@ function synchronizeDefaultPreset() {
   const size = orientedPresetSize(preset, defaultVertical.checked);
   form.elements.Width.value = size.width;
   form.elements.Height.value = size.height;
+  synchronizeCurrentDefaultSizeAction();
 }
 
 
@@ -217,16 +281,33 @@ function renderDefaultPresets(fromSavedDefault = false) {
 /** Reorients the selected global default preset. */
 defaultVertical.addEventListener("change", () => {
   renderDefaultPresets();
+  synchronizeCurrentDefaultSizeAction();
 });
 
 
 /** Applies the selected default preset without persisting until the form is saved. */
-defaultPreset.addEventListener("change", synchronizeDefaultPreset);
-form.addEventListener("input", () => { formDirty = true; });
+defaultPreset.addEventListener("change", () => { synchronizeDefaultPreset(); synchronizeCurrentDefaultSizeAction(); });
+form.addEventListener("input", synchronizeSaveSettingsAvailability);
 for (const control of [form.elements.Width, form.elements.Height]) {
-  control.addEventListener("input", () => { defaultPreset.value = "custom"; });
+  control.addEventListener("input", () => { defaultPreset.value = "custom"; synchronizeCurrentDefaultSizeAction(); });
 }
-form.addEventListener("change", () => { formDirty = true; });
+form.addEventListener("change", synchronizeSaveSettingsAvailability);
+
+/** Reads the active browser window through the same service-worker path used by Manual resize. @returns {Promise<void>} Completion after the fallback controls reflect the fresh size. */
+async function refreshCurrentDefaultWindowSize() {
+  const response = await request({ type: "get-window-size-limits" });
+  currentDefaultWindowSize = { width: response.current.width, height: response.current.height };
+  synchronizeCurrentDefaultSizeAction();
+}
+
+/** Adopts a freshly read browser window size as unsaved fallback Configuration only. */
+useCurrentDefaultSize.addEventListener("click", () => runButtonFeedback(useCurrentDefaultSize, { working: "Reading…", success: "Selected ✓" }, async () => {
+  const response = await request({ type: "get-window-size-limits" });
+  currentDefaultWindowSize = { width: response.current.width, height: response.current.height };
+  selectDefaultSize(currentDefaultWindowSize);
+  synchronizeSaveSettingsAvailability();
+  synchronizeCurrentDefaultSizeAction();
+}));
 
 
 /** Creates one labeled detail for a readable multi-row rule card. @param {string} label Field caption. @param {string} value Field value. @returns {HTMLDivElement} Detail element. */
@@ -334,7 +415,7 @@ function renderRules() {
     refresh.append(materialIcon("refresh"), "Refresh from cloud");
     refresh.title = "Replace shared rule behavior from browser sync while keeping this computer's size and placement";
     refresh.disabled = rulesLocked || !config.global.syncRules;
-    refresh.addEventListener("click", () => runClientAction("Refresh rule from cloud", () => request({ type: "refresh-rule-from-cloud", ruleId: rule.id }).then(refreshRuleAccess)));
+    refresh.addEventListener("click", () => runButtonFeedback(refresh, { working: "Refreshing…", success: "Refreshed ✓" }, () => request({ type: "refresh-rule-from-cloud", ruleId: rule.id }).then(refreshRuleAccess)));
     actions.append(toggle, remove, refresh);
     card.append(header, value, effective, details, createSyncDetails(rule, effectiveScope ?? "Unavailable"), actions);
     return card;
@@ -343,14 +424,16 @@ function renderRules() {
 
 
 /** Sends a granular write through the background's serialized configuration queue. @param {object} message Mutation. @param {boolean} refreshForm Whether to replace the global form. @returns {Promise<void>} Completion. */
-async function mutate(message, refreshForm = false) {
+async function mutate(message, refreshForm = false, feedback = undefined) {
   if (saving || (rulesLocked && message.type !== "save-global-settings")) return;
   saving = true;
-  await runClientAction("Save configuration", async () => {
+  const action = async () => {
     config = (await request(message)).config;
     renderRules();
     if (refreshForm) renderGlobal();
-  });
+  };
+  if (feedback) await runButtonFeedback(feedback.button, feedback.labels, action);
+  else await runClientAction("Save configuration", action);
   saving = false;
 }
 
@@ -358,15 +441,8 @@ async function mutate(message, refreshForm = false) {
 /** Saves only global settings, never a stale copy of the rule list. */
 form.addEventListener("submit", (event) => {
   event.preventDefault();
-  const global = { ...globalBase };
-  for (const [key, value] of new FormData(form)) if (key !== "automaticWindowSize") global[key] = ["ruleRetentionDays"].includes(key) ? Number(value) : value;
-  global.automaticWidth = Number(form.elements.Width.value);
-  global.automaticHeight = Number(form.elements.Height.value);
-  global.useDefaultSize = form.elements.automaticWindowSize.checked;
-  for (const name of ["enabled", "rememberMonitor", "syncRules"]) {
-    if (form.elements[name]) global[name] = form.elements[name].checked;
-  }
-  mutate({ type: "save-global-settings", global, base: globalBase }, true);
+  const global = currentGlobalSettings();
+  mutate({ type: "save-global-settings", global, base: globalBase }, true, { button: saveSettingsButton, labels: { working: "Saving…", success: "Saved ✓" } });
 });
 form.elements.automaticWindowSize.addEventListener("change", synchronizeDimensionAvailability);
 document.querySelector("#export").addEventListener("click", () => runClientAction("Export configuration", async () => {
@@ -384,7 +460,7 @@ document.querySelector("#import").addEventListener("change", (event) => runClien
 }));
 document.querySelector("#reset").addEventListener("click", () => {
   if (rulesLocked) return;
-  if (confirm("Reset all configuration?")) mutate({ type: "reset-configuration", base: config }, true);
+  if (confirm("Reset all configuration?")) mutate({ type: "reset-configuration", base: config }, true, { button: document.querySelector("#reset"), labels: { working: "Resetting…", success: "Reset ✓" } });
 });
 document.querySelector("#open-readme").addEventListener("click", () => runClientAction("Open local README", () => request({ type: "open-local-readme" })));
 document.querySelector("#copy-diagnostics").addEventListener("click", () => runClientAction("Copy diagnostics", copyDiagnostics));
@@ -425,4 +501,5 @@ runClientAction("Load configuration", async () => {
   renderGlobal();
   renderRules();
   await renderDiagnostics();
+  await refreshCurrentDefaultWindowSize();
 });
