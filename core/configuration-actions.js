@@ -64,7 +64,13 @@ export function applyConfigurationAction(config, message) {
 }
 
 
-/** Replaces only the matching rules after checking the dialog snapshot and URL. @param {object} config Latest configuration. @param {string} url Current source URL. @param {object} message Dialog transaction. @returns {object} Atomically staged configuration. */
+/** Records one authoritative semantic mutation effect for a synchronized active rule or tombstone. @param {object[]} effects Site-rule edit effects. @param {"create"|"recreate"|"update"|"delete"} type Semantic operation. @param {string} syncRuleId Deterministic synchronized identity. @param {number} revision Assigned semantic revision. @returns {void} Appends one effect. */
+function recordSemanticEffect(effects, type, syncRuleId, revision) {
+  effects.push({ type, syncRuleId, revision });
+}
+
+
+/** Replaces only the matching rules after checking the dialog snapshot and URL. @param {object} config Latest configuration. @param {string} url Current source URL. @param {object} message Dialog transaction. @returns {{config: object, semanticEffects: object[]}} Atomically staged configuration and authoritative semantic effects. */
 export function applySiteRuleEdits(config, url, message) {
   if (!config.global.enabled) throw new Error("SmartWindowSize is disabled.");
   if (!toUrl(url) || url !== message.url) throw new Error("The source page changed. Reload this dialog before saving.");
@@ -76,22 +82,32 @@ export function applySiteRuleEdits(config, url, message) {
   const beforeById = new Map(current.map((rule) => [rule.id, rule]));
   const afterById = new Map(candidate.rules.map((rule) => [rule.id, rule]));
   const tombstones = { ...(candidate.sync?.tombstones ?? {}) };
+  const semanticEffects = [];
   for (const [id, before] of beforeById) {
     const after = afterById.get(id);
     if (!after || before.scope.type !== after.scope.type || before.scope.value !== after.scope.value) {
-      if (before.sync?.id) tombstones[before.sync.id] = { id: before.sync.id, revision: nextSemanticRevision(before.sync.revision), modifiedAt: new Date().toISOString(), modifiedByClientId: candidate.sync.clientId, deleted: true };
+      if (before.sync?.id) {
+        const tombstone = { id: before.sync.id, revision: nextSemanticRevision(before.sync.revision), modifiedAt: new Date().toISOString(), modifiedByClientId: candidate.sync.clientId, deleted: true };
+        tombstones[before.sync.id] = tombstone;
+        recordSemanticEffect(semanticEffects, "delete", tombstone.id, tombstone.revision);
+      }
+      if (after?.sync?.id) recordSemanticEffect(semanticEffects, "create", after.sync.id, after.sync.revision);
       if (after) delete after.sync;
       continue;
     }
     if (before.sync && (before.position.enabled !== after.position.enabled || before.display.enabled !== after.display.enabled)) {
       after.sync = { ...before.sync, revision: nextSemanticRevision(before.sync.revision), modifiedAt: new Date().toISOString(), modifiedByClientId: candidate.sync.clientId, conflict: null };
+      recordSemanticEffect(semanticEffects, "update", after.sync.id, after.sync.revision);
     }
   }
   // A new Add continues deleted identity history so ordinary revision-first reconciliation can accept it remotely.
   for (const rule of candidate.rules) if (!beforeById.has(rule.id) && rule.sync?.id) {
     const tombstone = tombstones[rule.sync.id];
-    if (tombstone) rule.sync = { ...rule.sync, revision: nextSemanticRevision(tombstone.revision, message.knownCloudRevisions?.[rule.sync.id]), modifiedAt: new Date().toISOString(), modifiedByClientId: candidate.sync.clientId, origin: "user", conflict: null };
+    if (tombstone) {
+      rule.sync = { ...rule.sync, revision: nextSemanticRevision(tombstone.revision, message.knownCloudRevisions?.[rule.sync.id]), modifiedAt: new Date().toISOString(), modifiedByClientId: candidate.sync.clientId, origin: "user", conflict: null };
+      recordSemanticEffect(semanticEffects, "recreate", rule.sync.id, rule.sync.revision);
+    } else recordSemanticEffect(semanticEffects, "create", rule.sync.id, rule.sync.revision);
     delete tombstones[rule.sync.id];
   }
-  return { ...candidate, sync: { ...candidate.sync, tombstones } };
+  return { config: { ...candidate, sync: { ...candidate.sync, tombstones } }, semanticEffects };
 }

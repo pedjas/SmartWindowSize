@@ -4,11 +4,12 @@
  */
 import { canonicalizeScopeValue } from "./rule-matcher.js";
 import { findActiveRuleByCanonicalIdentity } from "./rule-sync.js";
+import { RULE_TYPE_TYPES } from "./rule-types.js";
 
 /**
  * A canonical target matched against a tab URL.
  * @typedef {object} RuleScope
- * @property {"domain_tree"|"domain_www_pair"|"domain_exact"|"url_subpaths"|"url_any_parameters"|"url_exact_parameters"|"url_non_exact_parameters"} type URL coverage type.
+ * @property {string} type Registered URL coverage type.
  * @property {string} value Canonical URL-derived value stored for the scope.
  */
 
@@ -193,14 +194,10 @@ function normalizeRuleSync(value) {
 const LEGACY_SCOPE_TYPES = Object.freeze({ domain: "domain_tree", subdomain: "domain_exact", path: "url_subpaths", page: "url_exact_parameters" });
 
 
-/** Current coverage type names accepted by persisted configuration. @type {ReadonlySet<string>} */
-const SCOPE_TYPES = new Set(["domain_tree", "domain_www_pair", "domain_exact", "url_subpaths", "url_any_parameters", "url_exact_parameters", "url_non_exact_parameters"]);
-
-
 /** Converts a legacy or current coverage type into the current vocabulary. @param {unknown} type Candidate coverage type. @returns {string|null} Current type or null when unsupported. */
 export function normalizeScopeType(type) {
   if (typeof type !== "string") return null;
-  return LEGACY_SCOPE_TYPES[type] ?? (SCOPE_TYPES.has(type) ? type : null);
+  return LEGACY_SCOPE_TYPES[type] ?? (RULE_TYPE_TYPES.includes(type) ? type : null);
 }
 
 

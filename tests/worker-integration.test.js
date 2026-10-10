@@ -2,8 +2,9 @@
  * Executes the real service worker and shared modules against a deterministic
  * browser API, including bounds events emitted by programmatic updates.
  */
-import test from "node:test";
+import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 import * as storage from "../core/storage.js";
@@ -21,6 +22,38 @@ import * as tabLifecycle from "../core/tab-lifecycle.js";
 import * as ruleSync from "../core/rule-sync.js";
 import * as ruleSyncStore from "../core/rule-sync-store.js";
 import { windowBoundsChanged } from "../core/window-bounds.js";
+
+
+/** Keeps imported production modules bound to the browser fixture that started their asynchronous work. */
+const browserContexts = new AsyncLocalStorage();
+const liveFixtures = new Set();
+let fallbackChrome = null;
+
+/** Resolves chrome for imported modules without depending on a mutable host-global fixture activation. */
+const chromeContextProxy = new Proxy({}, {
+  get(_target, property) {
+    const chrome = browserContexts.getStore() ?? fallbackChrome;
+    if (!chrome) throw new Error("No browser fixture context is active.");
+    return chrome[property];
+  },
+  set(_target, property, value) {
+    const chrome = browserContexts.getStore() ?? fallbackChrome;
+    if (!chrome) throw new Error("No browser fixture context is active.");
+    chrome[property] = value;
+    return true;
+  },
+  deleteProperty(_target, property) {
+    const chrome = browserContexts.getStore() ?? fallbackChrome;
+    if (!chrome) throw new Error("No browser fixture context is active.");
+    return delete chrome[property];
+  }
+});
+globalThis.chrome = chromeContextProxy;
+
+
+afterEach(async () => {
+  await Promise.all([...liveFixtures].map((fixture) => fixture.dispose()));
+});
 
 
 /** Builds a fully valid saved rule. @param {string} type Coverage. @param {string} value Canonical target. @param {number} width Width. @returns {object} Rule fixture. */
@@ -61,25 +94,48 @@ async function browserFixture(rules = [], useFirefoxWindowEvents = false, firefo
   let omitCreatedRuleDialogFromQuery = false;
   let createdPopupStartsBlank = false;
   let tabGetFailure = null;
+  let disposed = false;
+  let localReadGate = null;
+  const pendingTasks = new Set();
+
+
+  /** Runs and tracks fixture work in this fixture's permanent browser context. @template T @param {() => T|Promise<T>} operation Fixture operation. @returns {Promise<T>} Completion. */
+  function runInFixture(operation) {
+    if (disposed) return Promise.reject(new Error("Browser fixture has been disposed."));
+    return trackFixturePromise(browserContexts.run(chrome, operation));
+  }
+
+
+  /** Tracks an asynchronous browser API result even when production code intentionally starts it without awaiting the outer callback. @template T @param {T|Promise<T>} result Browser API result. @returns {Promise<T>} Completion. */
+  function trackFixturePromise(result) {
+    const task = Promise.resolve(result);
+    pendingTasks.add(task);
+    task.then(() => pendingTasks.delete(task), () => pendingTasks.delete(task));
+    return task;
+  }
 
 
   /** Captures registered browser event callbacks. @param {string} name Event key. @returns {object} Event facade. */
-  function event(name) { return { addListener(callback) { listeners[name] = callback; } }; }
+  function event(name) { return { addListener(callback) { listeners[name] = (...args) => runInFixture(() => callback(...args)); } }; }
 
 
   /** Creates one asynchronous browser storage area. @param {object} data Storage contents. @param {string} area Storage area name. @returns {object} API facade. */
   function area(data, area) {
     return {
-      async get(key) { return key === null ? structuredClone(data) : { [key]: structuredClone(data[key]) }; },
-      async set(values) {
+      get(key) { return trackFixturePromise((async () => {
+        const gate = area === "local" ? localReadGate : null;
+        if (gate) { gate.markReached(); await gate.promise; }
+        return key === null ? structuredClone(data) : { [key]: structuredClone(data[key]) };
+      })()); },
+      set(values) { return trackFixturePromise((async () => {
         const changes = {};
         for (const [key, value] of Object.entries(values)) {
           changes[key] = { oldValue: structuredClone(data[key]), newValue: structuredClone(value) };
           data[key] = structuredClone(value);
         }
         listeners.storage?.(changes, area);
-      },
-      async remove(key) { for (const item of Array.isArray(key) ? key : [key]) delete data[item]; }
+      })()); },
+      remove(key) { return trackFixturePromise((async () => { for (const item of Array.isArray(key) ? key : [key]) delete data[item]; })()); }
     };
   }
 
@@ -148,7 +204,6 @@ async function browserFixture(rules = [], useFirefoxWindowEvents = false, firefo
       onCreated: event("created"), onBoundsChanged: event("bounds"), onFocusChanged: event("focus"), onRemoved: event("removed")
     }
   };
-  globalThis.chrome = chrome;
   const source = (await readFile(new URL("../background/service-worker.js", import.meta.url), "utf8")).replace(/^import .*;\r?$/gm, "");
   const firefoxWindowEvents = useFirefoxWindowEvents ? {
     onCreated: chrome.windows.onCreated,
@@ -159,39 +214,81 @@ async function browserFixture(rules = [], useFirefoxWindowEvents = false, firefo
   const bindings = { ...storage, ...resolver, ...updater, ...manager, ...icons, ...menus, ...configModule, ...actions, ...matcher, ...diagnostics, ...session, ...tabLifecycle, ...ruleSync, ...ruleSyncStore,
     windowBoundsChanged, APP_VERSION: "test", chrome, Date, URL, structuredClone,
     browser: firefoxWindowEvents ? { windows: firefoxWindowEvents } : undefined,
-    setTimeout: (callback) => { const id = ++nextTimer; timers.set(id, callback); return id; }, clearTimeout: (id) => timers.delete(id) };
+    setTimeout: (callback) => { const id = ++nextTimer; timers.set(id, () => runInFixture(callback)); return id; }, clearTimeout: (id) => timers.delete(id) };
   let context = vm.createContext(bindings);
-  vm.runInContext(source, context);
+  await runInFixture(() => vm.runInContext(source, context));
 
 
-  /** Drains Promise-based browser work without firing deferred browser timers. @returns {Promise<void>} Completion. */
-  async function settle() {
-    for (let i = 0; i < 48; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  /** Waits for every actual service-worker queue to become stable without advancing fixture timers. @returns {Promise<boolean>} Whether no queue changed while it drained. */
+  async function drainWorkerQueues() {
+    return browserContexts.run(chrome, () => vm.runInContext(`(async () => {
+      const before = [geometryTrackQueue, dependentDialogQueue, editorQueue, ruleSyncQueue, menuQueue, iconQueue, ...windowQueues.values()];
+      await Promise.allSettled(before);
+      const after = [geometryTrackQueue, dependentDialogQueue, editorQueue, ruleSyncQueue, menuQueue, iconQueue, ...windowQueues.values()];
+      return windowQueues.size === 0 && before.length === after.length && before.every((queue, index) => queue === after[index]);
+    })()`, context));
   }
 
-  /** Makes this fixture the active host-level browser backing imported production modules. @returns {void} Activates isolated fixture storage. */
-  function activate() { globalThis.chrome = chrome; }
 
-  await settle();
-  return { local, ephemeral, cloud, windows, tabs, updates, iconUpdates, messages, listeners, created: () => created, optionsOpened: () => optionsOpened,
+  /** Drains tracked fixture work without relying on arbitrary host event-loop delays. @returns {Promise<void>} Completion. */
+  async function settle() {
+    while (true) {
+      await Promise.resolve();
+      if (pendingTasks.size) await Promise.all([...pendingTasks]);
+      const workerIdle = await drainWorkerQueues();
+      if (!workerIdle || pendingTasks.size !== 0) continue;
+      await new Promise((resolve) => setImmediate(resolve));
+      if (pendingTasks.size === 0 && await drainWorkerQueues()) return;
+    }
+  }
+
+  const fixture = { local, ephemeral, cloud, windows, tabs, updates, iconUpdates, messages, listeners, created: () => created, optionsOpened: () => optionsOpened,
     omitCreatedRuleDialogFromQuery: (value) => { omitCreatedRuleDialogFromQuery = value; },
     createdPopupStartsBlank: (value) => { createdPopupStartsBlank = value; },
     tabGetFailure: (error) => { tabGetFailure = error; },
-    closeWindow: async (id) => { activate(); windows.delete(id); for (const [tabId, tab] of tabs) if (tab.windowId === id) tabs.delete(tabId); listeners.removed?.(id); await settle(); },
-    activate,
-    restart: async () => { activate(); context = vm.createContext({ ...bindings }); vm.runInContext(source, context); await settle(); },
+    holdLocalReads: () => {
+      let release; let markReached;
+      const promise = new Promise((resolve) => { release = resolve; });
+      const reached = new Promise((resolve) => { markReached = resolve; });
+      localReadGate = { promise, release, markReached };
+      return { reached, release: () => { if (localReadGate?.promise === promise) localReadGate = null; release(); } };
+    },
+    closeWindow: async (id) => { await runInFixture(() => { windows.delete(id); for (const [tabId, tab] of tabs) if (tab.windowId === id) tabs.delete(tabId); return listeners.removed?.(id); }); await settle(); },
+    activate: () => { fallbackChrome = chrome; },
+    restart: async () => { await runInFixture(() => { context = vm.createContext({ ...bindings }); return vm.runInContext(source, context); }); await settle(); },
     editor: async (tabId = 1) => {
-      activate();
-      const dispatch = (...args) => vm.runInContext("dispatchRequest", context)(...args);
+      const dispatch = (...args) => runInFixture(() => vm.runInContext("dispatchRequest", context)(...args));
       await dispatch({ type: "open-rule-editor", tabId });
       const dialog = [...tabs.values()].find((tab) => tab.url?.startsWith(`chrome-extension://test/rule-delete/rule-delete.html?tabId=${tabId}&sourceWindowId=7&editorToken=`));
       const editorToken = new URL(dialog.url).searchParams.get("editorToken");
-      return { dialog, editorToken, dispatch: (message) => { activate(); return dispatch({ tabId, sourceWindowId: 7, editorToken, editorTabId: dialog.id, editorWindowId: dialog.windowId, ...message }, { tab: structuredClone(dialog) }); } };
+      return { dialog, editorToken, dispatch: (message) => dispatch({ tabId, sourceWindowId: 7, editorToken, editorTabId: dialog.id, editorWindowId: dialog.windowId, ...message }, { tab: structuredClone(dialog) }) };
     },
-    apply: (...args) => { activate(); return vm.runInContext("applyForTab", context)(...args); }, dispatch: (...args) => { activate(); return vm.runInContext("dispatchRequest", context)(...args); },
-    flush: (id) => { activate(); return vm.runInContext("inWindow", context)(id, () => vm.runInContext("flushPendingBounds", context)(id)); }, settle,
-    runTimers: async () => { activate(); const callbacks = [...timers.values()]; timers.clear(); for (const callback of callbacks) callback(); await settle(); },
-    request: (message) => { activate(); return new Promise((resolve) => listeners.message(message, {}, resolve)); } };
+    apply: (...args) => runInFixture(() => vm.runInContext("applyForTab", context)(...args)), dispatch: (...args) => runInFixture(() => vm.runInContext("dispatchRequest", context)(...args)),
+    flush: (id) => runInFixture(() => vm.runInContext("inWindow", context)(id, () => vm.runInContext("flushPendingBounds", context)(id))), settle,
+    runTimers: async () => { const callbacks = [...timers.values()]; timers.clear(); for (const callback of callbacks) callback(); await settle(); },
+    runTimersUntil: async (predicate) => {
+      while (!predicate()) {
+        const callbacks = [...timers.values()];
+        if (callbacks.length === 0) throw new Error("No fixture timer remains to satisfy the requested completion condition.");
+        timers.clear();
+        for (const callback of callbacks) callback();
+        await settle();
+      }
+    },
+    request: (message) => runInFixture(() => new Promise((resolve) => listeners.message(message, {}, resolve))),
+    dispose: async () => {
+      disposed = true;
+      timers.clear();
+      localReadGate?.release(); localReadGate = null;
+      for (const name of Object.keys(listeners)) delete listeners[name];
+      await Promise.allSettled([...pendingTasks]);
+      liveFixtures.delete(fixture);
+    }
+  };
+  liveFixtures.add(fixture);
+  fixture.activate();
+  await settle();
+  return fixture;
 }
 
 
@@ -202,13 +299,12 @@ async function twoClientFixture() {
   const b = await browserFixture([], false, true, cloud, "client-b", true);
   /** Delivers the cloud snapshot to one client as a browser sync-area change. @param {object} target Receiving client. @returns {Promise<void>} Completion after its worker settles. */
   async function deliver(target) {
-    target.activate();
     const changes = Object.fromEntries(Object.entries(cloud).map(([key, value]) => [key, { oldValue: undefined, newValue: structuredClone(value) }]));
-    target.listeners.storage(changes, "sync");
+    await target.listeners.storage(changes, "sync");
     await target.settle();
   }
   /** Fully drains each independently activated client before a later fixture can replace host-level module bindings. @returns {Promise<void>} Completion after both queues settle. */
-  async function settleAll() { a.activate(); await a.settle(); b.activate(); await b.settle(); }
+  async function settleAll() { await a.settle(); await b.settle(); }
   return { a, b, cloud, deliver, settleAll };
 }
 
@@ -311,6 +407,24 @@ test("enabling Rules Sync publishes one compact record without local geometry", 
   assert.equal(browser.local.smartWindowSizeConfig.rules[0].width, before.width);
   assert.equal(browser.local.smartWindowSizeConfig.rules[0].sync.id, before.sync.id);
   assert.equal(browser.local.smartWindowSizeConfig.rules[0].sync.revision, before.sync.revision);
+});
+
+
+test("fixture-bound async work cannot switch local storage when another client starts work", async () => {
+  const a = await browserFixture([], false, true, undefined, "client-a");
+  const b = await browserFixture([], false, true, undefined, "client-b");
+  const gate = a.holdLocalReads();
+  const base = structuredClone(a.local.smartWindowSizeConfig.global);
+  const aSave = a.request({ type: "save-global-settings", base, global: { ...base, enabled: false } });
+  await gate.reached;
+  const bRead = b.request({ type: "get-state", tabId: 1 });
+  gate.release();
+  await Promise.all([aSave, bRead]);
+  await Promise.all([a.settle(), b.settle()]);
+  assert.equal(a.local.smartWindowSizeConfig.global.enabled, false);
+  assert.equal(b.local.smartWindowSizeConfig.global.enabled, true);
+  await a.dispose();
+  assert.equal(b.local.smartWindowSizeConfig.global.enabled, true);
 });
 
 
@@ -906,8 +1020,7 @@ test("Firefox polling persists the final manual geometry without recording a pro
   await browser.runTimers();
   assert.deepEqual({ width: browser.local.smartWindowSizeConfig.rules[0].width, height: browser.local.smartWindowSizeConfig.rules[0].height }, { width: 800, height: 600 });
   Object.assign(window, { width: 1182, height: 712 });
-  await browser.runTimers();
-  await browser.runTimers();
+  await browser.runTimersUntil(() => browser.local.smartWindowSizeConfig.rules[0].width === 1182 && browser.local.smartWindowSizeConfig.rules[0].height === 712);
   assert.deepEqual({ width: browser.local.smartWindowSizeConfig.rules[0].width, height: browser.local.smartWindowSizeConfig.rules[0].height }, { width: 1182, height: 712 });
   assert.equal((await diagnostics.loadDiagnostics()).length, 0);
 });

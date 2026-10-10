@@ -14,7 +14,7 @@ import { RULE_TYPE_LABELS, RULE_TYPE_DESCRIPTORS } from "../core/rule-types.js";
 import { fingerprint } from "../core/configuration-actions.js";
 import { windowBoundsChanged } from "../core/window-bounds.js";
 import { formatClientIdForDisplay } from "../core/client-id-presentation.js";
-import { originLabel } from "../core/rule-presentation.js";
+import { formatRuleSyncStatus, originLabel, ruleSyncStatus } from "../core/rule-presentation.js";
 
 
 /** Loads an ESM script without imports for dependency-injected VM execution. @param {string} path Project-relative script path. @returns {Promise<string>} Executable script body. */
@@ -142,7 +142,7 @@ async function ruleEditorFixture(access = {}) {
   let onMessage;
   let confirmations = 0;
   const context = vm.createContext({
-    APP_VERSION: "test", SCOPE_PRIORITY, RULE_TYPE_LABELS, scopeForUrl, canonicalMatchKey, canonicalMatchKeyForUrl, findActiveRuleByCanonicalIdentity, matchingRulesForUrl, resolveRule, formatClientIdForDisplay, originLabel, URL, structuredClone, crypto: { randomUUID: () => "test-id" },
+    APP_VERSION: "test", SCOPE_PRIORITY, RULE_TYPE_DESCRIPTORS, RULE_TYPE_LABELS, scopeForUrl, canonicalMatchKey, canonicalMatchKeyForUrl, findActiveRuleByCanonicalIdentity, matchingRulesForUrl, resolveRule, formatClientIdForDisplay, formatRuleSyncStatus, originLabel, ruleSyncStatus, URL, structuredClone, crypto: { randomUUID: () => "test-id" },
     installClientErrors: () => {}, runClientAction: async (_operation, action) => action(),
     request: async (message) => {
       requests.push(message);
@@ -205,6 +205,13 @@ test("every supported rule type has one shared presentation label", () => {
 });
 
 
+test("rule editor derives its selector options from the shared UI descriptors", async () => {
+  const fixture = await ruleEditorFixture();
+  assert.deepEqual(fixture.controls.get("selected-scope").children.map((option) => [option.value, option.textContent]),
+    RULE_TYPE_DESCRIPTORS.map(({ type, label }) => [type, label]));
+});
+
+
 test("rule editor previews shared effective scope live without persistence", async () => {
   const fixture = await ruleEditorFixture({ url: "https://first.example/docs/page?b=2&a=1#section" });
   const controls = fixture.controls;
@@ -229,7 +236,7 @@ test("editing a synchronized rule shows only concise status and preserves its id
   const synced = { ...fixtureRule(), sync: { id: "0123456789abcdef0123456789abcdef", revision: 3, modifiedAt: null, modifiedByClientId: null, origin: "legacy", conflict: null } };
   const fixture = await ruleEditorFixture({ rule: synced, syncEnabled: true });
   fixture.edit(synced);
-  assert.equal(fixture.controls.get("editor-sync-status").textContent, "Sync: enabled · rev. 3");
+  assert.equal(fixture.controls.get("editor-sync-status").textContent, "Sync: Synced · rev. 3");
   const id = fixture.state().rules[0].sync.id;
   fixture.controls.get("selected-scope").value = "domain_tree";
   fixture.controls.get("selected-scope").listeners.change();

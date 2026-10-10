@@ -1,5 +1,5 @@
 /**
- * SmartWindowSize | Version: 1.1.21 | Last updated: 2026-10-09 00:00:00 +02:00
+ * SmartWindowSize | Version: 1.1.25 | Last updated: 2026-10-10 00:00:00 +02:00
  *
  * Coordinates serialized window operations, validated configuration writes,
  * unique dialogs, and session diagnostics.
@@ -342,10 +342,13 @@ async function saveSiteRulesForEditor(registry, message) {
       }
       const display = await displayForRule(null, window);
       const knownCloudRevisions = Object.fromEntries((await Promise.all(message.rules.filter((rule) => rule.sync?.id).map(async (rule) => [rule.sync.id, (await readCloudRule(rule.sync.id).catch(() => null))?.status.revision]))).filter(([, revision]) => Number.isInteger(revision)));
-      const recreatedRules = [];
+      let semanticEffects = [];
       applyingCloudRules = true;
-      try { await updateConfig((config) => {
-        const candidate = applySiteRuleEdits(config, entry.url, { ...message, knownCloudRevisions });
+      let savedConfig;
+      try { savedConfig = await updateConfig((config) => {
+        const mutation = applySiteRuleEdits(config, entry.url, { ...message, knownCloudRevisions });
+        semanticEffects = mutation.semanticEffects;
+        const candidate = mutation.config;
         const changedIds = new Set(message.rules.filter((rule) => fingerprint(rule) !== fingerprint(message.baseRules.find((base) => base.id === rule.id))).map((rule) => rule.id));
         candidate.rules = candidate.rules.map((rule) => changedIds.has(rule.id) ? {
           ...rule, width: window.width, height: window.height,
@@ -353,11 +356,13 @@ async function saveSiteRulesForEditor(registry, message) {
           display: rule.display.enabled && display ? { enabled: true, id: display.id } : rule.display,
           lastUpdatedAt: new Date().toISOString()
         } : rule);
-        for (const rule of candidate.rules) if (!config.rules.some((current) => current.id === rule.id) && config.sync.tombstones?.[rule.sync?.id]) recreatedRules.push(structuredClone(rule));
         return candidate;
       }); }
       finally { applyingCloudRules = false; }
-      for (const rule of recreatedRules) await writeCloudRule(rule.sync.id, activeCloudRecord(rule));
+      for (const effect of semanticEffects) if (effect.type === "recreate") {
+        const rule = savedConfig.rules.find((candidate) => candidate.sync?.id === effect.syncRuleId && candidate.sync.revision === effect.revision);
+        if (rule) await writeCloudRule(effect.syncRuleId, activeCloudRecord(rule));
+      }
       await reconcileRulesWithCloud();
     });
     activeTab = (await chrome.tabs.query({ active: true, windowId: entry.sourceWindowId }))[0] ?? null;

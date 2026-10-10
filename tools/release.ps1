@@ -32,6 +32,7 @@ $ErrorActionPreference = 'Stop'
 
 Import-Module (Join-Path $PSScriptRoot 'release-changelog.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'release-diagnostics.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'version-consistency.psm1') -Force
 
 
 <# The GitHub repository that receives every SmartWindowSize Draft Release. #>
@@ -367,6 +368,8 @@ function Invoke-ReleasePreflight {
         }
     }
 
+    Assert-VersionConsistency -ProjectRoot $ProjectRoot | Out-Null
+
     # The release script must never operate on a parent, sibling, or copied repository.
     $gitRoot = Invoke-RepositoryGitCommand -GitPath $gitPath -Arguments @('rev-parse', '--show-toplevel') -Description 'Checking Git repository root'
     if ([System.IO.Path]::GetFullPath($gitRoot) -ne [System.IO.Path]::GetFullPath($ProjectRoot)) {
@@ -403,10 +406,6 @@ function Invoke-ReleasePreflight {
     Invoke-NativeCommand -Executable $ghPath -Arguments @('auth', 'status', '--hostname', 'github.com') -Description 'Checking GitHub CLI authentication' | Out-Null
 
     $version = Get-ManifestVersion -ManifestPath $manifestPath
-    $template = Get-Content -LiteralPath $firefoxTemplatePath -Raw | ConvertFrom-Json
-    if ($template.version -and $template.version -ne '__VERSION__' -and $template.version -ne $version) {
-        throw (Get-VersionMismatchDiagnostic -RootVersion $version -FirefoxVersion $template.version)
-    }
 
     $tag = "v$version"
     $unreleasedMilestones = Get-UnreleasedMilestoneSections -ChangelogPath $changelogPath -Version $version
@@ -448,6 +447,8 @@ function Invoke-DryRunPreflight {
         }
     }
 
+    Assert-VersionConsistency -ProjectRoot $ProjectRoot | Out-Null
+
     $gitRoot = Invoke-RepositoryGitCommand -GitPath $gitPath -Arguments @('rev-parse', '--show-toplevel') -Description 'Checking Git repository root'
     if ([System.IO.Path]::GetFullPath($gitRoot) -ne [System.IO.Path]::GetFullPath($ProjectRoot)) {
         throw "Dry run must execute from its own repository root. Found: $gitRoot"
@@ -475,10 +476,6 @@ function Invoke-DryRunPreflight {
     }
 
     $version = Get-ManifestVersion -ManifestPath $manifestPath
-    $template = Get-Content -LiteralPath $firefoxTemplatePath -Raw | ConvertFrom-Json
-    if ($template.version -and $template.version -ne '__VERSION__' -and $template.version -ne $version) {
-        throw (Get-VersionMismatchDiagnostic -RootVersion $version -FirefoxVersion $template.version)
-    }
 
     $tag = "v$version"
     $unreleasedMilestones = Get-UnreleasedMilestoneSections -ChangelogPath $changelogPath -Version $version

@@ -1,11 +1,15 @@
+import { RULE_TYPE_REGISTRY } from "./rule-types.js";
+
 /**
  * Converts supported web URLs into comparable SmartWindowSize rule coverage values.
  * The resolver and rule updater share these functions to keep matching consistent.
  */
 
 
-/** Rule coverage order from most specific to least specific. @type {readonly string[]} */
-export const SCOPE_PRIORITY = Object.freeze(["url_exact_parameters", "url_non_exact_parameters", "url_any_parameters", "url_subpaths", "domain_exact", "domain_www_pair", "domain_tree"]);
+/** Rule coverage order from most specific to least specific, derived from the shared registry. @type {readonly string[]} */
+export const SCOPE_PRIORITY = Object.freeze([...RULE_TYPE_REGISTRY]
+  .sort((left, right) => left.matchPriority - right.matchPriority)
+  .map(({ type }) => type));
 
 
 /** Parses an HTTP(S) URL and rejects unsupported browser or malformed URLs. @param {string} urlText URL text from a browser API. @returns {URL|null} Parsed supported URL or null. */

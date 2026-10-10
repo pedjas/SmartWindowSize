@@ -1,5 +1,24 @@
 # CHANGELOG
 
+## 1.1.25 - 2026-10-10
+
+### Rules semantic architecture
+
+- Centralize site-rule semantic mutation effects so Rules Sync publishes an
+  explicit recreate result without independently reinterpreting tombstones.
+- Centralize supported rule-type registration so matcher priority, Configuration
+  validation, and editor presentation derive from one authoritative registry.
+- Centralize user-facing Rules Sync status interpretation across Configuration
+  and Set rules, including an explicit Not synced yet state for missing metadata.
+
+### Version safety and CHANGELOG maintenance
+
+- Add shared PowerShell version-consistency validation to stop manifest,
+  runtime, UI-title, header, and Firefox-template source mirrors drifting
+  before commit, packaging, or release.
+- Regroup committed CHANGELOG sections by functional outcome without crossing
+  milestone boundaries or changing the `# Released` marker semantics.
+
 ## 1.1.21 - 2026-10-09
 
 - Add a Manual resize action that selects the current target-window size
@@ -18,10 +37,8 @@
 
 ## 1.1.13 - 2026-10-09
 
-- Improve release preflight diagnostics with actionable working-tree, branch
-  synchronization, version, tag, and GitHub CLI guidance.
-- Give Chromium and Brave development builds a stable public-key extension
-  identity, and show Extension ID separately from each installation's Client ID.
+### Rules Sync
+
 - Add full visible `storage.sync` reconciliation: import cloud-only rules,
   provide Sync now through the normal reconciliation engine, show cloud
   active/status/tombstone counts and last-sync results, and catch up at startup
@@ -41,9 +58,19 @@
   Modified by as `(local)` when the shared modifier is this installation.
 - Centralize active canonical duplicate detection so tombstone-only history
   does not block an explicit Add.
+
+### Browser identity and diagnostics
+
+- Give Chromium and Brave development builds a stable public-key extension
+  identity, and show Extension ID separately from each installation's Client ID.
+
+### Regression coverage and release workflow
+
 - Add isolated two-client regression coverage for create/import/edit, deletion
   propagation, recreate and repeated lifecycle, and startup catch-up; a
   transient sync read failure no longer blocks local rule Save.
+- Improve release preflight diagnostics with actionable working-tree, branch
+  synchronization, version, tag, and GitHub CLI guidance.
 
 # Released
 
@@ -56,22 +83,32 @@
 
 ### Added
 
+#### Rules and scope presentation
+
 - Add a Configuration-style Active rule popup section with a human-readable
   rule label, canonical scope value, and optional remembered geometry rows.
 - Centralize user-facing rule-type labels so popup, Configuration, and the
   Set rules editor cannot diverge on supported scopes.
-- Modernize shared UI controls, Diagnostics Log/Environment sub-tabs, and local
-  Material action icons while simplifying the Manual resize dialog.
-- Show the locally remembered monitor identifier in rule details and adopt
-  locally bundled Material icons for compact rule utility actions.
-- Add optional browser-native Rules Sync with a 128-bit deterministic identity,
-  visible effective scope, local per-device geometry, and legacy migration.
-- Show the local sync client, richer rule details, and clearer effective-scope guidance.
 - Add a domain scope covering only the base hostname and its www variant, plus a ready-to-edit default scope for new rules.
 - Add an enabled-state control to the site-rule editor and make the matching
   effective scope visible in its rule list.
 
+#### Rules Sync and local rule state
+
+- Add optional browser-native Rules Sync with a 128-bit deterministic identity,
+  visible effective scope, local per-device geometry, and legacy migration.
+- Show the local sync client, richer rule details, and clearer effective-scope guidance.
+
+#### Shared UI and diagnostics
+
+- Modernize shared UI controls, Diagnostics Log/Environment sub-tabs, and local
+  Material action icons while simplifying the Manual resize dialog.
+- Show the locally remembered monitor identifier in rule details and adopt
+  locally bundled Material icons for compact rule utility actions.
+
 ### Changed
+
+#### Rules-card actions and controls
 
 - Use a recognizable local Material trash-can icon with compact danger treatment
   for destructive Delete actions.
@@ -79,14 +116,22 @@
   details expand, with accessible labels and action tooltips.
 - Establish compact secondary and icon-button styles without reducing primary
   Save, Add rule, Apply, or Close actions.
+
+#### Rules Sync and diagnostics
+
 - Show the complete local client ID with a Copy action, move Refresh from cloud
   into the rule action row, and use readable sync-origin labels.
 - Add a Diagnostics detail setting (errors, warnings and errors, or verbose);
   static environment and sync data stays outside the event log.
+
+#### Scope documentation
+
 - Document all seven scope priorities, including the www-pair scope, in the
   shipped README, Configuration help, specification, and manual smoke tests.
 
 ### Fixed
+
+#### Window geometry and browser eligibility
 
 - Restore a matching rule's remembered absolute window position during normal
   active-tab and navigation application, not only for newly created windows.
@@ -102,25 +147,41 @@
 
 ### Changed
 
+#### Window geometry
+
 - Keep Chromium geometry persistence on committed `windows.onBoundsChanged`
   events and use session-backed polling only for tracked normal Firefox site
   windows, where that event is unavailable.
+
+#### Diagnostics
+
 - Limit Diagnostics to actionable failures instead of successful lifecycle,
   resize, apply, debounce, and persistence traces.
+
+#### Firefox toolbar and extension UI
+
 - Keep Firefox toolbar actions flat by omitting only decorative separators,
   avoiding Firefox's automatic SmartWindowSize overflow submenu.
 - Add a Firefox-only `Options` toolbar context-menu action and make extension
   pages follow the browser or system color scheme.
+
+#### Release workflow safeguards
+
 - Require an explicit user request before package generation, release dry-run,
   release preflight, or a real release is started.
 
 ### Fixed
+
+#### Site eligibility and rule application
 
 - Prevent browser and extension UI pages from triggering rule or automatic
   window sizing, including hash navigation inside SmartWindowSize Configuration.
 - Preserve browser-neutral rule application through active-tab navigation while
   a Rules editor session exists, with regression coverage for source-window
   targeting and non-matching URLs.
+
+#### Firefox Rules dialogs
+
 - Save Rules through its token-bound editor session even when Firefox keeps
   focus on the editor popup or another source-window tab is active.
 - Treat Firefox's initial `about:blank` Rules popup tab as the reserved editor
@@ -147,8 +208,14 @@
 - Preserve the exact source tab, browser window, and URL for every rule dialog
   in session storage, preventing Firefox from incorrectly asking users to
   reopen a legitimately opened dialog.
+
+#### Firefox manifest compatibility
+
 - Remove the invalid Firefox manifest `windows` permission while retaining the
   WebExtensions windows API used by the extension.
+
+#### Package validation and cleanup
+
 - Load every .NET ZIP assembly required by Windows PowerShell package builds.
 - Create Chrome and Firefox ZIP entries with portable `/` path separators so
   AMO accepts nested extension files on Windows builds.
@@ -163,9 +230,23 @@
 
 ### Fixed
 
+#### Release and Git safety
+
 - Restore the original changelog and remove its staging entry when a release
   stops before its release commit is created.
+- Treat successful Git commands with normal stderr status output as successful
+  and report any existing partial release state without attempting overwrite.
+
+#### Dialog lifecycle and extension presentation
+
 - Close auxiliary dialogs when their source browser window is closed.
+- Treat a stale **Set rules for this site** dialog as an expected visible state
+  rather than adding it to Diagnostics.
+- Kept the extension-manager icon neutral instead of showing the in-extension
+  diagnostic flag as the browser's default extension icon.
+
+#### Automatic no-rule window sizing
+
 - Group no-rule automatic sizing controls in Configuration and disable every
   dependent control while automatic sizing is off.
 - Rename persisted automatic no-rule dimensions to `automaticWidth` and
@@ -182,31 +263,35 @@
   previous 1200 Ă„â€šĂ˘â‚¬ĹľÄ‚ËĂ˘â€šÂ¬ÄąË‡Ă„â€šĂ‹ÂÄ‚ËĂ˘â‚¬ĹˇĂ‚Â¬Ä‚ËĂ˘â€šÂ¬ÄąÄ„ 960 default.
 - Enable Configuration `Width` and `Height` whenever automatic no-rule window
   sizing is enabled, including when a preset is selected.
-- Treat a stale **Set rules for this site** dialog as an expected visible state
-  rather than adding it to Diagnostics.
 - Simplified Configuration default-size labels and aligned the two dimension
   fields in one row.
 - Renamed the automatic no-rule sizing option for clearer Configuration text.
-- Kept the extension-manager icon neutral instead of showing the in-extension
-  diagnostic flag as the browser's default extension icon.
-- Treat successful Git commands with normal stderr status output as successful
-  and report any existing partial release state without attempting overwrite.
 
 ### Changed
 
+#### Rule-level monitor behavior
+
 - Document per-rule monitor remembering and its unavailable-display fallback in
   the packaged user guide.
-- Group the Configuration automatic no-rule sizing controls below Extension
-  enabled, including the preset, Vertical, Width, and Height controls.
 - Moved the **Remember monitor** setting from global Configuration to each
   individual rule, displayed its state in the rule list, and added per-rule
   enable or disable controls.
+
+#### Automatic no-rule window sizing
+
+- Group the Configuration automatic no-rule sizing controls below Extension
+  enabled, including the preset, Vertical, Width, and Height controls.
+
+#### Installation packaging
+
 - Added `tools\\make-install.bat` as the stable launcher for the existing
   installation-package procedure.
 
 ## 1.0.2 - 2026-09-27
 
 ### Changed
+
+#### Release tooling and package artifacts
 
 - Reset the application version baseline to 1.0.1 for future version
   increments.
@@ -217,13 +302,22 @@
   changelog, uses the existing packages, and uploads only the two ZIP assets.
 - Standardized installation artifact names: stable unpacked Chrome and Firefox
   directories, plus versioned Chrome and Firefox ZIP package names.
+
+#### Rules and window behavior
+
 - Replaced the crowded Rules table with readable multi-row rule cards.
 - Opening or switching to a site in an existing browser window retains that
   window's position while still applying the saved size and keeping it visible.
+
+#### User documentation
+
 - Reworked the packaged user guide and added an explicit local-only privacy
   statement.
 
 ### Fixed
+
+#### Draft Release and package execution
+
 - Allow the first GitHub Draft Release to continue when GitHub CLI explicitly
   reports that its release tag does not exist, while retaining failures for
   every other GitHub CLI error.
@@ -233,6 +327,9 @@
   switch parameter.
 - Fixed release-script Git calls on repositories that require an explicit
   safe-directory setting.
+
+#### Rules editing
+
 - Fixed **Set rules for this site** availability in the toolbar context menu so
   it follows the current tab URL immediately.
 - Reloading unchanged rules no longer asks to discard changes.

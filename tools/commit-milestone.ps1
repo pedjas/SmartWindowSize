@@ -26,6 +26,7 @@ $ErrorActionPreference = 'Stop'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 
 Import-Module (Join-Path $PSScriptRoot 'release-changelog.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'version-consistency.psm1') -Force
 
 
 <#
@@ -74,6 +75,7 @@ function Get-RelativeProjectPath {
 $manifest = Get-Content -LiteralPath (Join-Path $ProjectRoot 'manifest.json') -Raw | ConvertFrom-Json
 $version = [string]$manifest.version
 if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Root manifest version '$version' must use X.Y.Z." }
+Assert-VersionConsistency -ProjectRoot $ProjectRoot | Out-Null
 if ($Message -notmatch "\($([regex]::Escape($version))\)$") { throw "Commit message must end with the current version ($version)." }
 
 <# Do not mix this helper's explicit staging operation with an existing index. #>

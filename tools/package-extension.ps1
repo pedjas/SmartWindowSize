@@ -42,6 +42,8 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 <# The repository root derived from this script's known tools/ location. #>
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 
+Import-Module (Join-Path $PSScriptRoot 'version-consistency.psm1') -Force
+
 <# The only runtime directories allowed in a release artifact. #>
 $RuntimeDirectories = @('about', 'background', 'context', 'core', 'icons', 'options', 'popup', 'readme-viewer', 'rule-delete', 'size-picker')
 
@@ -337,6 +339,7 @@ function New-TargetRelease {
 }
 
 
+Assert-VersionConsistency -ProjectRoot $ProjectRoot | Out-Null
 $version = Get-ApplicationVersion
 New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
 

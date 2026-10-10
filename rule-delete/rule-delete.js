@@ -7,9 +7,9 @@ import { SCOPE_PRIORITY } from "../core/rule-matcher.js";
 import { matchingRulesForUrl, resolveRule } from "../core/rule-resolver.js";
 import { request, installClientErrors, runClientAction, showClientError } from "../core/client.js";
 import { formatClientIdForDisplay } from "../core/client-id-presentation.js";
-import { originLabel } from "../core/rule-presentation.js";
+import { formatRuleSyncStatus, originLabel, ruleSyncStatus } from "../core/rule-presentation.js";
 import { canonicalMatchKey, canonicalMatchKeyForUrl, findActiveRuleByCanonicalIdentity } from "../core/rule-sync.js";
-import { RULE_TYPE_LABELS } from "../core/rule-types.js";
+import { RULE_TYPE_DESCRIPTORS, RULE_TYPE_LABELS } from "../core/rule-types.js";
 
 
 /** Browser tab identifier whose matching rules are being edited. @type {number} */
@@ -80,6 +80,18 @@ const editor = document.querySelector("#editor");
 /** Coverage selector inside the rule editor. @type {HTMLSelectElement} */
 const scopeInput = document.querySelector("#selected-scope");
 
+/** Populates the selector from shared descriptors so UI membership and order cannot drift. @returns {void} */
+function populateScopeOptions() {
+  scopeInput.replaceChildren(...RULE_TYPE_DESCRIPTORS.map(({ type, label }) => {
+    const option = document.createElement("option");
+    option.value = type;
+    option.textContent = label;
+    return option;
+  }));
+}
+
+populateScopeOptions();
+
 
 /** Position-persistence checkbox inside the rule editor. @type {HTMLInputElement} */
 const positionInput = document.querySelector("#remember-position");
@@ -106,12 +118,12 @@ function renderEffectiveScopePreview() {
   preview.textContent = state && SCOPE_PRIORITY.includes(scopeInput.value) ? canonicalMatchKeyForUrl(state.url, scopeInput.value) ?? "—" : "—";
   const syncStatus = document.querySelector("#editor-sync-status");
   const existing = editingRuleId ? state?.rules.find((rule) => rule.id === editingRuleId) : null;
-  if (!existing?.sync) {
+  if (!existing) {
     syncStatus.hidden = true;
     return;
   }
   syncStatus.hidden = false;
-  syncStatus.textContent = existing.sync.conflict ? "Sync: Conflict" : state.syncEnabled ? `Sync: enabled · rev. ${existing.sync.revision}` : "Sync: disabled";
+  syncStatus.textContent = `Sync: ${formatRuleSyncStatus(ruleSyncStatus(existing, state.syncEnabled))}`;
 }
 
 
@@ -158,7 +170,7 @@ function render() {
     const metadata = document.createElement("span");
     metadata.className = "details";
     const modified = rule.sync?.modifiedAt && !Number.isNaN(Date.parse(rule.sync.modifiedAt)) ? new Date(rule.sync.modifiedAt).toLocaleString() : "Legacy migration (unordered)";
-    metadata.textContent = `Effective scope: ${canonicalMatchKey(rule.scope) ?? "—"}\nRemembered monitor: ${rememberedMonitorValue(rule)}\nSync Rule ID: ${rule.sync?.id ?? "—"}\nRevision: ${rule.sync?.revision ?? "—"}\nModified: ${modified}\nModified by: ${formatClientIdForDisplay(rule.sync?.modifiedByClientId, state.clientId)}\nOrigin: ${originLabel(rule.sync?.origin)}\nSync: ${rule.sync?.conflict ? "Conflict" : state.syncEnabled ? "Sync enabled" : "Sync disabled"}`;
+    metadata.textContent = `Effective scope: ${canonicalMatchKey(rule.scope) ?? "—"}\nRemembered monitor: ${rememberedMonitorValue(rule)}\nSync Rule ID: ${rule.sync?.id ?? "—"}\nRevision: ${rule.sync?.revision ?? "—"}\nModified: ${modified}\nModified by: ${formatClientIdForDisplay(rule.sync?.modifiedByClientId, state.clientId)}\nOrigin: ${originLabel(rule.sync?.origin)}\nSync: ${formatRuleSyncStatus(ruleSyncStatus(rule, state.syncEnabled))}`;
     inspect.append(summary, metadata);
     details.append(inspect);
     const actions = document.createElement("div");

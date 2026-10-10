@@ -81,6 +81,18 @@ test("all human-readable Modified by fields use the shared local-client attribut
   assert.match(worker, /syncEnabled: config\.global\.syncRules, clientId: config\.sync\.clientId/);
 });
 
+test("Configuration and Set rules use the shared Rules Sync status interpretation", async () => {
+  const [options, editor] = await Promise.all([
+    readFile(new URL("../options/options.js", import.meta.url), "utf8"),
+    readFile(new URL("../rule-delete/rule-delete.js", import.meta.url), "utf8")
+  ]);
+  for (const source of [options, editor]) {
+    assert.match(source, /formatRuleSyncStatus, originLabel, ruleSyncStatus.*core\/rule-presentation\.js/);
+    assert.match(source, /formatRuleSyncStatus\(ruleSyncStatus\(/);
+    assert.doesNotMatch(source, /Local only/);
+  }
+});
+
 test("all rule presentation surfaces import the shared rule-type labels", async () => {
   const [popup, options, editor] = await Promise.all([
     readFile(new URL("../popup/popup.js", import.meta.url), "utf8"),

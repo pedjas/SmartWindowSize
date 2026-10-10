@@ -38,8 +38,9 @@ test("an explicit Add clears a matching local tombstone while retaining its dete
   added.sync = { id: "0123456789abcdef0123456789abcdef", revision: 1, modifiedAt: "2026-10-09T10:00:00.000Z", modifiedByClientId: "client-a", origin: "user", conflict: null };
   config.sync.tombstones[added.sync.id] = { id: added.sync.id, revision: 2, modifiedAt: "2026-10-09T09:00:00.000Z", modifiedByClientId: "client-a", deleted: true };
   const result = applySiteRuleEdits(config, "https://alpha.example/", { url: "https://alpha.example/", baseRules: [], rules: [added] });
-  assert.equal(result.rules[0].sync.id, added.sync.id);
-  assert.equal(result.sync.tombstones[added.sync.id], undefined);
+  assert.equal(result.config.rules[0].sync.id, added.sync.id);
+  assert.equal(result.config.sync.tombstones[added.sync.id], undefined);
+  assert.deepEqual(result.semanticEffects, [{ type: "recreate", syncRuleId: added.sync.id, revision: 3 }]);
 });
 
 
@@ -50,10 +51,29 @@ test("an explicit re-add continues the highest known semantic revision for its d
   added.sync = { id: "0123456789abcdef0123456789abcdef", revision: 1, modifiedAt: "2026-10-09T10:00:00.000Z", modifiedByClientId: "client-a", origin: "user", conflict: null };
   config.sync.tombstones[added.sync.id] = { id: added.sync.id, revision: 8, modifiedAt: "2026-10-09T10:01:00.000Z", modifiedByClientId: "client-a", deleted: true };
   const result = applySiteRuleEdits(config, "https://alpha.example/", { url: "https://alpha.example/", baseRules: [], rules: [added], knownCloudRevisions: { [added.sync.id]: 10 } });
-  assert.equal(result.rules[0].sync.id, added.sync.id);
-  assert.equal(result.rules[0].sync.revision, 11);
-  assert.equal(result.rules[0].sync.origin, "user");
-  assert.equal(result.sync.tombstones[added.sync.id], undefined);
+  assert.equal(result.config.rules[0].sync.id, added.sync.id);
+  assert.equal(result.config.rules[0].sync.revision, 11);
+  assert.equal(result.config.rules[0].sync.origin, "user");
+  assert.equal(result.config.sync.tombstones[added.sync.id], undefined);
+  assert.deepEqual(result.semanticEffects, [{ type: "recreate", syncRuleId: added.sync.id, revision: 11 }]);
+});
+
+
+test("site-rule mutation effects report normal creation, semantic update, and deletion", () => {
+  const config = createDefaultConfig();
+  config.sync.clientId = "client-a";
+  const added = { ...rule(), sync: { id: "a".repeat(32), revision: 1, modifiedAt: "2026-10-09T10:00:00.000Z", modifiedByClientId: "client-a", origin: "user", conflict: null } };
+  const created = applySiteRuleEdits(config, "https://alpha.example/", { url: "https://alpha.example/", baseRules: [], rules: [added] });
+  assert.deepEqual(created.semanticEffects, [{ type: "create", syncRuleId: added.sync.id, revision: 1 }]);
+
+  const existing = created.config.rules[0];
+  const edited = applySiteRuleEdits(created.config, "https://alpha.example/", { url: "https://alpha.example/", baseRules: [existing], rules: [{ ...existing, position: { enabled: true, x: 10, y: 20 } }] });
+  assert.deepEqual(edited.semanticEffects, [{ type: "update", syncRuleId: existing.sync.id, revision: 2 }]);
+
+  const deletedRule = edited.config.rules[0];
+  const deleted = applySiteRuleEdits(edited.config, "https://alpha.example/", { url: "https://alpha.example/", baseRules: [deletedRule], rules: [] });
+  assert.deepEqual(deleted.semanticEffects, [{ type: "delete", syncRuleId: existing.sync.id, revision: 3 }]);
+  assert.equal(deleted.config.sync.tombstones[existing.sync.id].revision, 3);
 });
 
 
@@ -62,7 +82,7 @@ test("site Save preserves unrelated rules and rejects new overlapping rules adde
   const original = rule();
   config.rules = [original, rule("beta.example")];
   const changed = applySiteRuleEdits(config, "https://alpha.example/", { url: "https://alpha.example/", baseRules: [original], rules: [] });
-  assert.deepEqual(changed.rules.map((item) => item.id), ["beta.example"]);
+  assert.deepEqual(changed.config.rules.map((item) => item.id), ["beta.example"]);
   config.rules.push({ ...rule(), id: "exact", scope: { type: "domain_exact", value: "alpha.example" } });
   assert.throws(() => applySiteRuleEdits(config, "https://alpha.example/", { url: "https://alpha.example/", baseRules: [original], rules: [] }), /Reload/);
 });

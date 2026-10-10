@@ -3,7 +3,7 @@ import { APP_VERSION } from "../core/app-version.js";
 import { WINDOW_PRESETS, findHorizontalPresetIndex, orientedPresetSize } from "../core/window-presets.js";
 import { request, installClientErrors, runClientAction, showClientError } from "../core/client.js";
 import { formatClientIdForDisplay } from "../core/client-id-presentation.js";
-import { originLabel } from "../core/rule-presentation.js";
+import { formatRuleSyncStatus, originLabel, ruleSyncStatus } from "../core/rule-presentation.js";
 import { canonicalMatchKey } from "../core/rule-sync.js";
 import { RULE_TYPE_LABELS } from "../core/rule-types.js";
 
@@ -255,14 +255,6 @@ function formatLocalDateTime(value) {
 }
 
 
-/** Creates compact sync state derived only from local metadata that the UI can actually distinguish. @param {object} rule Saved rule. @returns {string} Concise status. */
-function syncSummary(rule) {
-  if (rule.sync?.conflict) return "Conflict";
-  if (!config.global.syncRules) return "Sync disabled";
-  return `Sync enabled · rev. ${rule.sync?.revision ?? "—"}`;
-}
-
-
 /** Creates hidden technical sync metadata while preserving full copyable values. @param {object} rule Saved rule. @param {string} effectiveScope Matcher-derived identity text. @returns {HTMLDetailsElement} Sync details disclosure. */
 function createSyncDetails(rule, effectiveScope) {
   const disclosure = document.createElement("details");
@@ -314,7 +306,7 @@ function renderRules() {
       createRuleDetail("Monitor", rememberedMonitorValue(rule)),
       createRuleDetail("Position", rule.position.enabled ? `${rule.position.x},${rule.position.y}` : ""),
       createRuleDetail("Last updated", formatLocalDateTime(rule.lastUpdatedAt)),
-      createRuleDetail("Sync", syncSummary(rule))
+      createRuleDetail("Sync", formatRuleSyncStatus(ruleSyncStatus(rule, config.global.syncRules)))
     );
     const actions = document.createElement("div");
     actions.className = "rule-card-actions";
