@@ -10,14 +10,11 @@ import { SCOPE_PRIORITY, ruleMatchesUrl } from "./rule-matcher.js";
 export function resolveRule(url, config) {
   if (!config.global.enabled) return { status: "DISABLED", reason: "global-disabled", rule: null };
   for (const type of SCOPE_PRIORITY) {
-    const matches = config.rules.filter((rule) => rule.scope.type === type && ruleMatchesUrl(rule, url));
+    const matches = config.rules.filter((rule) => rule.enabled !== false && rule.scope.type === type && ruleMatchesUrl(rule, url));
     if (!matches.length) continue;
 
-    // A disabled matching rule is an explicit opt-out at its own scope.
     const rule = matches.sort((a, b) => b.scope.value.length - a.scope.value.length)[0];
-    return rule.enabled
-      ? { status: "RULE", reason: type, rule }
-      : { status: "DISABLED", reason: `${type}-disabled`, rule };
+    return { status: "RULE", reason: type, rule };
   }
   if (!config.global.useDefaultSize) return { status: "NONE", reason: "no-matching-rule", rule: null };
   return {

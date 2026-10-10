@@ -31,6 +31,17 @@ test("global and rule-delete conflicts preserve newer settings", () => {
   assert.equal(config.rules.length, 1);
 });
 
+test("per-rule Disable and Enable persist only local rule state", () => {
+  const config = createDefaultConfig();
+  const original = rule();
+  config.rules = [original];
+  const disabled = applyConfigurationAction(config, { type: "set-rule-enabled", ruleId: original.id, enabled: false, base: original });
+  assert.equal(disabled.rules[0].enabled, false);
+  assert.deepEqual({ ...disabled.rules[0], enabled: true }, original);
+  const reenabled = applyConfigurationAction(disabled, { type: "set-rule-enabled", ruleId: original.id, enabled: true, base: disabled.rules[0] });
+  assert.equal(reenabled.rules[0].enabled, true);
+});
+
 test("an explicit Add clears a matching local tombstone while retaining its deterministic rule identity", () => {
   const config = createDefaultConfig();
   config.sync.clientId = "client-a";

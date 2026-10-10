@@ -36,7 +36,7 @@ import { RULE_TYPE_TYPES } from "./rule-types.js";
  * @typedef {object} WindowRule
  * @property {string} id Stable rule identifier.
  * @property {RuleScope} scope URL target to which the rule applies.
- * @property {boolean} enabled Whether this rule enables or explicitly disables its scope.
+ * @property {boolean} enabled Whether this rule participates in resolution.
  * @property {number} width Saved window width in pixels.
  * @property {number} height Saved window height in pixels.
  * @property {RulePosition} position Optional saved window position.

@@ -132,8 +132,8 @@ The general keep-visible behavior still applies to normal browser windows
 without a website rule, including newly opened windows without a URL.
 
 After a user resizes a window, the new dimensions are saved to its narrowest
-matching rule. Other rules are unchanged. Without a matching rule, nothing is
-saved unless automatic remembering is enabled.
+enabled matching rule. Disabled rules are ignored, so a broader enabled rule
+may receive the update. Without an enabled matching rule, nothing is saved.
 
 ## Manual window dimensions
 

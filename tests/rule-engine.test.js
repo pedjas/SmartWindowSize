@@ -12,7 +12,7 @@ import { iconPaths, isActionActive } from "../background/action-icon.js";
 
 /**
  * Verifies shared rule resolution and update behavior without a live browser.
- * The tests cover precedence, selected-scope isolation, and explicit disabled rules.
+ * The tests cover precedence, selected-scope isolation, and disabled-rule fallback.
  */
 
 /** Creates a compact valid rule fixture for deterministic resolver tests. @param {string} type Scope type. @param {string} value Scope value. @param {number} width Window width. @param {boolean} enabled Rule enabled state. @returns {object} Rule fixture. */
@@ -38,9 +38,57 @@ test("legacy selected scope cannot override the resolved parent rule", () => {
   assert.equal(second.rule.width, 900);
 });
 
-test("a disabled matching rule is explicit, not a default", () => {
-  const config = createDefaultConfig(); config.rules = [rule("domain_tree", "example.com", 1200, false)];
-  assert.equal(resolveRule("https://example.com/a", config).status, "DISABLED");
+test("resolver skips a disabled specific rule and uses the enabled broader rule", () => {
+  const config = createDefaultConfig();
+  config.rules = [rule("domain_tree", "example.com", 1200), rule("domain_exact", "blog.example.com", 1300, false)];
+  const resolved = resolveRule("https://blog.example.com/a", config);
+  assert.equal(resolved.status, "RULE");
+  assert.equal(resolved.rule.width, 1200);
+});
+
+test("resolver selects the highest-priority enabled match among disabled matches", () => {
+  const config = createDefaultConfig();
+  config.rules = [
+    rule("domain_tree", "example.com", 1000),
+    rule("domain_exact", "blog.example.com", 1100, false),
+    rule("url_subpaths", "https://blog.example.com/a", 1200, false)
+  ];
+  assert.equal(resolveRule("https://blog.example.com/a/child", config).rule.width, 1000);
+});
+
+test("all disabled matches use the normal no-rule fallback without a negative exclusion", () => {
+  const config = createDefaultConfig();
+  config.rules = [rule("domain_tree", "example.com", 1200, false)];
+  assert.equal(resolveRule("https://example.com/a", config).status, "NONE");
+  config.global.useDefaultSize = true;
+  assert.equal(resolveRule("https://example.com/a", config).status, "DEFAULT");
+});
+
+test("reenabling a specific rule restores its normal precedence", () => {
+  const config = createDefaultConfig();
+  const specific = rule("domain_exact", "blog.example.com", 1300, false);
+  config.rules = [rule("domain_tree", "example.com", 1200), specific];
+  assert.equal(resolveRule("https://blog.example.com/a", config).rule.width, 1200);
+  specific.enabled = true;
+  assert.equal(resolveRule("https://blog.example.com/a", config).rule.width, 1300);
+});
+
+test("resize persistence skips disabled matches and updates the effective enabled rule", () => {
+  const config = createDefaultConfig();
+  config.rules = [rule("domain_tree", "example.com", 1200), rule("domain_exact", "blog.example.com", 1300, false)];
+  const update = updateRuleForResize(config, { url: "https://blog.example.com/a" }, 900, 700);
+  assert.equal(update.changed, true);
+  assert.equal(update.rule.scope.type, "domain_tree");
+  assert.equal(update.config.rules.find((item) => item.scope.type === "domain_tree").width, 900);
+  assert.equal(update.config.rules.find((item) => item.scope.type === "domain_exact").width, 1300);
+});
+
+test("resize persistence does not update a disabled rule when no enabled rule matches", () => {
+  const config = createDefaultConfig();
+  config.rules = [rule("domain_tree", "example.com", 1200, false)];
+  const update = updateRuleForResize(config, { url: "https://example.com/a" }, 900, 700);
+  assert.equal(update.changed, false);
+  assert.equal(update.rule, null);
 });
 
 
