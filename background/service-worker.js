@@ -1,5 +1,5 @@
 /**
- * SmartWindowSize | Version: 1.2.0 | Last updated: 2026-10-10 06:19:40 +02:00
+ * SmartWindowSize | Version: 1.2.2 | Last updated: 2026-10-10 08:05:00 +02:00
  *
  * Coordinates serialized window operations, validated configuration writes,
  * unique dialogs, and session diagnostics.
@@ -16,7 +16,7 @@ import { applyConfigurationAction, applySiteRuleEdits, fingerprint } from "../co
 import { windowBoundsChanged } from "../core/window-bounds.js";
 import { scopeForUrl, toUrl } from "../core/rule-matcher.js";
 import { canonicalMatchKey, abbreviateOpaqueId, findActiveRuleByCanonicalIdentity, syncRuleIdForScope } from "../core/rule-sync.js";
-import { clearDiagnostics, loadDiagnostics, recordDiagnostic, recordDiagnosticEvent } from "../core/diagnostics.js";
+import { clearDiagnostics, loadDiagnostics, recordDiagnostic, recordDiagnosticEvent, recordDiagnosticWarning } from "../core/diagnostics.js";
 import { readSession, writeSession, removeSession } from "../core/runtime-session.js";
 import { getTabIfExists, isMissingTabError } from "../core/tab-lifecycle.js";
 import { activeCloudRecord, applyCloudDefinition, compareSyncStates, deletedCloudRecord, localRuleFromCloudRecord, localTombstoneFromCloudStatus, readCloudRule, readVisibleCloudRules, SYNC_STATE_ORDER, writeCloudRule } from "../core/rule-sync-store.js";
@@ -91,11 +91,20 @@ let ruleSyncQueue = Promise.resolve();
 let applyingCloudRules = false;
 
 
+/** Records one deduplicated warning for an unresolved state conflict without changing its reconciliation outcome. @param {string} syncRuleId Deterministic rule identity. @param {string} conflictType Conflict branch. @param {object} local Local active or tombstone state. @param {object} cloud Cloud state. @returns {Promise<void>} Completion after the shared diagnostic is visible. */
+async function reportRulesSyncConflict(syncRuleId, conflictType, local, cloud) {
+  const localStatus = local.status ?? local;
+  const cloudStatus = cloud.status ?? cloud;
+  const identity = JSON.stringify({ syncRuleId, conflictType, localRevision: localStatus.revision, cloudRevision: cloudStatus.revision, localDeleted: Boolean(localStatus.deleted), cloudDeleted: Boolean(cloudStatus.deleted), localClient: localStatus.modifiedByClientId ?? null, cloudClient: cloudStatus.modifiedByClientId ?? null, localDefinition: local.definition ?? null, cloudDefinition: cloud.definition ?? null });
+  await reportDiagnosticWarning("Rules Sync conflict", "Could not automatically resolve differing rule states.", { syncRuleId, conflictType, local: localStatus, cloud: cloudStatus }, `rules-sync-conflict:${identity}`);
+}
+
+
 /** Reconciles every local sync-aware rule with its independent cloud record. @returns {Promise<void>} Completion after writes and safe local imports. */
 function reconcileRulesWithCloud(manual = false) {
   ruleSyncQueue = ruleSyncQueue.catch(() => undefined).then(async () => {
     const config = await loadConfig();
-    if (!config.global.syncRules || !chrome.storage.sync) return { skipped: true, received: 0, uploaded: 0, deleted: 0, conflicts: 0, cloud: { active: 0, status: 0, tombstones: 0, malformed: 0 } };
+    if (!config.global.syncRules || !chrome.storage.sync) return { skipped: true, skippedReason: config.global.syncRules ? "storage-sync-unavailable" : "sync-disabled", received: 0, uploaded: 0, deleted: 0, conflicts: 0, cloud: { active: 0, status: 0, tombstones: 0, malformed: 0 } };
     if (manual && config.global.diagnosticLevel === "verbose") await recordDiagnosticEvent("Rules Sync now", "Started full reconciliation.", { localRules: config.rules.length });
     const visible = await readVisibleCloudRules();
     const removals = new Set();
@@ -121,7 +130,9 @@ function reconcileRulesWithCloud(manual = false) {
       }
       if (order === SYNC_STATE_ORDER.LOCAL_WINS) { await writeCloudRule(rule.sync.id, local); result.uploaded++; continue; }
       if (order === SYNC_STATE_ORDER.EQUIVALENT) continue;
-      replacements.set(rule.id, { ...rule, sync: { ...rule.sync, conflict: { kind: cloud.status.deleted ? "equal-revision-state-conflict" : "equal-revision-definition-conflict", cloud: cloud.status } } }); result.conflicts++;
+      const conflictType = cloud.status.deleted ? "equal-revision-state-conflict" : "equal-revision-definition-conflict";
+      replacements.set(rule.id, { ...rule, sync: { ...rule.sync, conflict: { kind: conflictType, cloud: cloud.status } } }); result.conflicts++;
+      await reportRulesSyncConflict(rule.sync.id, conflictType, local, cloud);
     }
     for (const tombstone of Object.values(config.sync.tombstones ?? {})) {
       const cloud = visible.records.get(tombstone.id); seen.add(tombstone.id);
@@ -137,7 +148,7 @@ function reconcileRulesWithCloud(manual = false) {
         continue;
       }
       if (order === SYNC_STATE_ORDER.LOCAL_WINS) { await writeCloudRule(tombstone.id, local); result.uploaded++; continue; }
-      if (order === SYNC_STATE_ORDER.CONFLICT) { result.conflicts++; await recordDiagnosticEvent("Rules Sync conflict", "Equal-revision local tombstone and cloud active state could not be ordered.", { syncRuleId: tombstone.id, local: tombstone, cloud: cloud.status }); }
+      if (order === SYNC_STATE_ORDER.CONFLICT) { result.conflicts++; await reportRulesSyncConflict(tombstone.id, "equal-revision-state-conflict", local, cloud); }
     }
     for (const [id, cloud] of visible.records) if (!seen.has(id) && !cloud.status.deleted && await syncRuleIdForScope(cloud.definition.scope) === id) {
       additions.push(localRuleFromCloudRecord(id, cloud, createRuleId(), new Date().toISOString())); result.received++;
@@ -148,6 +159,7 @@ function reconcileRulesWithCloud(manual = false) {
       finally { applyingCloudRules = false; }
     }
     await writeSession("rulesSyncLastResult", { occurredAt: new Date().toISOString(), ...result });
+    notifyDiagnostics();
     if (manual && config.global.diagnosticLevel === "verbose") await recordDiagnosticEvent("Rules Sync now", "Full reconciliation completed.", result);
     return result;
   });
@@ -341,7 +353,13 @@ async function saveSiteRulesForEditor(registry, message) {
         throw new Error("Restore the source window before saving its dimensions.");
       }
       const display = await displayForRule(null, window);
-      const knownCloudRevisions = Object.fromEntries((await Promise.all(message.rules.filter((rule) => rule.sync?.id).map(async (rule) => [rule.sync.id, (await readCloudRule(rule.sync.id).catch(() => null))?.status.revision]))).filter(([, revision]) => Number.isInteger(revision)));
+      const knownCloudRevisions = Object.fromEntries((await Promise.all(message.rules.filter((rule) => rule.sync?.id).map(async (rule) => {
+        try { return [rule.sync.id, (await readCloudRule(rule.sync.id))?.status.revision]; }
+        catch (error) {
+          await reportDiagnosticWarning("Prepare Rules Sync update", "Cloud state could not be read while preparing the local rule Save.", { syncRuleId: rule.sync.id, error: String(error?.message ?? error) }, `prepare-rules-sync:${rule.sync.id}:${String(error?.message ?? error)}`);
+          return [rule.sync.id, undefined];
+        }
+      }))).filter(([, revision]) => Number.isInteger(revision)));
       let semanticEffects = [];
       applyingCloudRules = true;
       let savedConfig;
@@ -499,6 +517,17 @@ async function reportDiagnostic(operation, error, context = undefined) {
 }
 
 
+/** Stores a non-fatal warning through the shared session diagnostics channel. @param {string} operation Operation needing attention. @param {string} message User-facing warning. @param {object|undefined} context Technical context. @param {string|undefined} deduplicationKey Stable unresolved-condition identity. @returns {Promise<void>} Best-effort completion. */
+async function reportDiagnosticWarning(operation, message, context = undefined, deduplicationKey = undefined) {
+  try {
+    await recordDiagnosticWarning(operation, message, context, deduplicationKey);
+    notifyDiagnostics();
+  } catch {
+    // A diagnostic failure must not create an unhandled error loop.
+  }
+}
+
+
 /** Attaches a non-user-facing, JSON-safe failure trace before the common message handler records the error. @param {unknown} error Failure from a rule-dialog browser API operation. @param {object} context Immutable source and dialog trace. @returns {unknown} Original failure for normal request handling. */
 function attachRuleEditorDiagnosticContext(error, context) {
   if (error && typeof error === "object" && !error.diagnosticContext) error.diagnosticContext = context;
@@ -508,7 +537,7 @@ function attachRuleEditorDiagnosticContext(error, context) {
 
 /** Applies one tab icon without interrupting window recovery on icon failure. @param {number} tabId Tab ID. @param {object} resolved Resolution. @returns {Promise<void>} Completion. */
 async function synchronizeActionIcon(tabId, resolved) {
-  const failures = await updateActionIcon(tabId, resolved, (await loadDiagnostics()).some((entry) => entry.kind !== "trace"));
+  const failures = await updateActionIcon(tabId, resolved, (await loadDiagnostics()).some((entry) => entry.kind === "error"));
   for (const failure of failures) await reportDiagnostic(failure.operation, failure.error);
 }
 

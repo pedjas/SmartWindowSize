@@ -94,6 +94,7 @@ async function browserFixture(rules = [], useFirefoxWindowEvents = false, firefo
   let omitCreatedRuleDialogFromQuery = false;
   let createdPopupStartsBlank = false;
   let tabGetFailure = null;
+  let syncReadFailure = null;
   let disposed = false;
   let localReadGate = null;
   const pendingTasks = new Set();
@@ -123,6 +124,7 @@ async function browserFixture(rules = [], useFirefoxWindowEvents = false, firefo
   function area(data, area) {
     return {
       get(key) { return trackFixturePromise((async () => {
+        if (area === "sync" && syncReadFailure && key !== null) throw syncReadFailure;
         const gate = area === "local" ? localReadGate : null;
         if (gate) { gate.markReached(); await gate.promise; }
         return key === null ? structuredClone(data) : { [key]: structuredClone(data[key]) };
@@ -246,6 +248,8 @@ async function browserFixture(rules = [], useFirefoxWindowEvents = false, firefo
     omitCreatedRuleDialogFromQuery: (value) => { omitCreatedRuleDialogFromQuery = value; },
     createdPopupStartsBlank: (value) => { createdPopupStartsBlank = value; },
     tabGetFailure: (error) => { tabGetFailure = error; },
+    syncReadFailure: (error) => { syncReadFailure = error; },
+    storageSyncAvailable: (available) => { if (available) chrome.storage.sync = area(cloud, "sync"); else delete chrome.storage.sync; },
     holdLocalReads: () => {
       let release; let markReached;
       const promise = new Promise((resolve) => { release = resolve; });
@@ -435,7 +439,8 @@ test("two independent clients create, import, and semantically edit one shared r
   assert.equal(cloud[key].status.revision, 1);
   assert.equal(created.sync.origin, "user");
   assert.equal(cloud[key].status.modifiedByClientId, "client-a");
-  await b.request({ type: "sync-rules-now" });
+  const syncNow = await b.request({ type: "sync-rules-now" });
+  assert.equal(syncNow.result.received, 1);
   const imported = b.local.smartWindowSizeConfig.rules[0];
   assert.equal(imported.sync.id, created.sync.id);
   assert.equal(imported.sync.origin, "sync");
@@ -534,6 +539,28 @@ test("startup reconciliation imports a missed cloud change into a newly initiali
   a.activate(); await a.settle(); b.activate(); await b.settle();
 });
 
+
+test("automatic Rules Sync reconciliation publishes fresh Diagnostics visibility and result state", async () => {
+  const browser = await browserFixture([], false, true, undefined, "client-b", true);
+  const scope = { type: "domain_tree", value: "fresh.example" };
+  const id = await ruleSync.syncRuleIdForScope(scope);
+  const key = ruleSyncStore.cloudRuleKey(id);
+  const initial = await browser.request({ type: "get-diagnostics" });
+  assert.deepEqual(initial.rulesSync.visibility, { active: 0, status: 0, tombstones: 0, malformed: 0 });
+  browser.messages.length = 0;
+  browser.cloud[key] = {
+    status: { revision: 1, modifiedAt: "2026-10-10T05:12:05.000Z", modifiedByClientId: "client-a", origin: "user", deleted: false },
+    definition: { scope, rememberPosition: false, rememberMonitor: false, seedWidth: 1200, seedHeight: 960 }
+  };
+  await browser.listeners.storage({ [key]: { oldValue: undefined, newValue: structuredClone(browser.cloud[key]) } }, "sync");
+  await browser.settle();
+  assert.ok(browser.messages.some((message) => message.type === "diagnostics-changed"));
+  const refreshed = await browser.request({ type: "get-diagnostics" });
+  assert.deepEqual(refreshed.rulesSync.visibility, { active: 1, status: 1, tombstones: 0, malformed: 0 });
+  assert.equal(refreshed.rulesSync.lastResult.received, 1);
+  assert.equal(browser.local.smartWindowSizeConfig.rules[0].sync.id, id);
+});
+
 test("an authoritative remote tombstone removes the active rule and persists its local deletion index", async () => {
   const browser = await browserFixture([rule()]);
   const base = structuredClone(browser.local.smartWindowSizeConfig.global);
@@ -579,6 +606,60 @@ test("unresolved equal-revision active and tombstone states remain local conflic
   await browser.settle();
   assert.equal(browser.local.smartWindowSizeConfig.rules.length, 1);
   assert.equal(browser.local.smartWindowSizeConfig.rules[0].sync.conflict.kind, "equal-revision-state-conflict");
+  assert.equal((await browser.request({ type: "get-diagnostics" })).entries.filter((entry) => entry.kind === "warning" && entry.operation === "Rules Sync conflict").length, 1);
+  await browser.request({ type: "sync-rules-now" });
+  assert.equal((await browser.request({ type: "get-diagnostics" })).entries.filter((entry) => entry.kind === "warning" && entry.operation === "Rules Sync conflict").length, 1);
+});
+
+
+test("unresolved equal-revision active conflicts use one default-visible warning and changed state gets a new warning", async () => {
+  const browser = await browserFixture([rule()]);
+  const base = structuredClone(browser.local.smartWindowSizeConfig.global);
+  await browser.request({ type: "save-global-settings", base, global: { ...base, syncRules: true } });
+  await browser.settle();
+  const local = browser.local.smartWindowSizeConfig.rules[0];
+  const key = ruleSyncStore.cloudRuleKey(local.sync.id);
+  browser.cloud[key].definition.rememberMonitor = true;
+  await browser.request({ type: "sync-rules-now" });
+  let response = await browser.request({ type: "get-diagnostics" });
+  assert.equal(response.entries.filter((entry) => entry.kind === "warning" && entry.operation === "Rules Sync conflict").length, 1);
+  await browser.request({ type: "sync-rules-now" });
+  response = await browser.request({ type: "get-diagnostics" });
+  assert.equal(response.entries.filter((entry) => entry.kind === "warning" && entry.operation === "Rules Sync conflict").length, 1);
+  browser.cloud[key].definition.rememberPosition = true;
+  await browser.request({ type: "sync-rules-now" });
+  response = await browser.request({ type: "get-diagnostics" });
+  assert.equal(response.entries.filter((entry) => entry.kind === "warning" && entry.operation === "Rules Sync conflict").length, 2);
+});
+
+
+test("manual Rules Sync distinguishes disabled and unavailable browser sync storage", async () => {
+  const browser = await browserFixture([]);
+  let result = await browser.request({ type: "sync-rules-now" });
+  assert.equal(result.result.skippedReason, "sync-disabled");
+  const base = structuredClone(browser.local.smartWindowSizeConfig.global);
+  await browser.request({ type: "save-global-settings", base, global: { ...base, syncRules: true } });
+  await browser.settle();
+  browser.storageSyncAvailable(false);
+  result = await browser.request({ type: "sync-rules-now" });
+  assert.equal(result.result.skippedReason, "storage-sync-unavailable");
+});
+
+
+test("Rules Save continues locally and warns when its non-fatal cloud read fails", async () => {
+  const saved = rule();
+  const browser = await browserFixture([saved]);
+  const base = structuredClone(browser.local.smartWindowSizeConfig.global);
+  await browser.request({ type: "save-global-settings", base, global: { ...base, syncRules: true } });
+  await browser.settle();
+  const editor = await browser.editor();
+  const state = await editor.dispatch({ type: "get-rule-editor-state" });
+  browser.syncReadFailure(new Error("sync read unavailable"));
+  browser.windows.get(7).width = 990;
+  await editor.dispatch({ type: "save-site-rules", url: state.url, baseRules: state.rules, rules: [{ ...state.rules[0], width: 990 }] });
+  assert.equal(browser.local.smartWindowSizeConfig.rules[0].width, 990);
+  const response = await browser.request({ type: "get-diagnostics" });
+  assert.equal(response.entries.filter((entry) => entry.kind === "warning" && entry.operation === "Prepare Rules Sync update").length, 1);
 });
 
 

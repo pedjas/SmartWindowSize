@@ -46,6 +46,7 @@ function selectOptionsTab(tab) {
     document.querySelector(`#${name}-tab`).setAttribute("aria-selected", String(name === tab));
   }
   history.replaceState(null, "", `#${tab}`);
+  if (tab === "diagnostics") refreshDiagnosticsWhenOpened();
 }
 
 
@@ -60,6 +61,7 @@ function selectDiagnosticsTab(tab) {
     document.querySelector(`#${panel}`).hidden = name !== tab;
     document.querySelector(`#${name === "log" ? "diagnostics-log" : "environment-sync"}-tab`).setAttribute("aria-selected", String(name === tab));
   }
+  if (tab === "environmentSync") refreshDiagnosticsWhenOpened();
 }
 document.querySelector("#diagnostics-log-tab").addEventListener("click", () => selectDiagnosticsTab("log"));
 document.querySelector("#environment-sync-tab").addEventListener("click", () => selectDiagnosticsTab("environmentSync"));
@@ -91,10 +93,16 @@ async function renderDiagnostics() {
 }
 
 
+/** Requests a current Diagnostics snapshot when a user opens a Diagnostics surface. @returns {void} Refresh begins without blocking tab selection. */
+function refreshDiagnosticsWhenOpened() {
+  renderDiagnostics().catch((error) => showClientError("Refresh diagnostics", error));
+}
+
+
 /** Formats inspectable Rules Sync identity metadata for copyable local diagnostics. @param {object} sync Rules Sync diagnostic snapshot. @returns {string} Diagnostic text. */
 function formatRulesSyncDiagnostics(sync) {
   const rules = sync.rules.map((rule) => `Rule: ${rule.id}\nEffective scope: ${rule.canonicalRuleIdentity}\nSync Rule ID: ${rule.sync?.id ?? "—"}\nRevision: ${rule.sync?.revision ?? "—"}\nModified: ${rule.sync?.modifiedAt ?? "legacy/unordered"}\nModified by: ${formatClientIdForDisplay(rule.sync?.modifiedByClientId, sync.clientId)}\nOrigin: ${originLabel(rule.sync?.origin)}\nConflict: ${JSON.stringify(rule.sync?.conflict ?? null)}\nCloud record: ${JSON.stringify(rule.cloud ?? "not checked", null, 2)}`).join("\n\n");
-  const visible = sync.visibility && !sync.visibility.error ? `Visible cloud active rules: ${sync.visibility.active}\nVisible cloud status records: ${sync.visibility.status}\nVisible cloud tombstones: ${sync.visibility.tombstones}` : "Visible cloud records: unavailable";
+  const visible = sync.visibility && !sync.visibility.error ? `Visible cloud active rules: ${sync.visibility.active}\nVisible cloud status records: ${sync.visibility.status}\nVisible cloud tombstones: ${sync.visibility.tombstones}\nMalformed cloud records: ${sync.visibility.malformed ?? 0}` : "Visible cloud records: unavailable";
   const last = sync.lastResult ? `\nLast sync: received ${sync.lastResult.received}, uploaded ${sync.lastResult.uploaded}, deleted ${sync.lastResult.deleted}, conflicts ${sync.lastResult.conflicts}` : "";
   return `Rules Sync\nEnabled: ${sync.enabled ? "Yes" : "No"}\nstorage.sync available: ${sync.storageSyncAvailable ? "Yes" : "No"}\nExtension ID: ${sync.extensionId ?? "—"}\nClient ID: ${sync.clientId ?? "—"}\n${visible}${last}\nIdentity algorithm: SHA-256(Effective scope), first 128 bits\n\n${rules || "No saved rules."}\n\nTombstones:\n${JSON.stringify(sync.tombstones, null, 2)}`;
 }
@@ -106,7 +114,7 @@ syncNow.addEventListener("click", () => runClientAction("Sync now", async () => 
   const response = await request({ type: "sync-rules-now" });
   config = response.config; renderRules(); await renderDiagnostics();
   const result = response.result;
-  syncNowStatus.textContent = result.skipped ? "Sync is disabled." : (result.received || result.uploaded || result.deleted || result.conflicts ? `Sync completed — Received: ${result.received}; Uploaded: ${result.uploaded}; Deleted: ${result.deleted}; Conflicts: ${result.conflicts}.` : "Sync completed — already up to date.");
+  syncNowStatus.textContent = result.skipped ? (result.skippedReason === "storage-sync-unavailable" ? "Browser sync storage is unavailable." : "Sync is disabled.") : (result.received || result.uploaded || result.deleted || result.conflicts ? `Sync completed — Received: ${result.received}; Uploaded: ${result.uploaded}; Deleted: ${result.deleted}; Conflicts: ${result.conflicts}.` : "Sync completed — already up to date.");
 }));
 
 

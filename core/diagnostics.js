@@ -16,6 +16,9 @@ let diagnosticQueue = Promise.resolve();
 /** Maximum number of recent diagnostic entries retained in the browser session. @type {number} */
 export const MAXIMUM_DIAGNOSTIC_ENTRIES = 50;
 
+/** User-visible severity kinds shared by every session diagnostic entry. @readonly */
+export const DIAGNOSTIC_KIND = Object.freeze({ ERROR: "error", WARNING: "warning", TRACE: "trace" });
+
 
 /** Maximum number of characters retained for one technical diagnostic string. @type {number} */
 const MAXIMUM_DETAIL_LENGTH = 12000;
@@ -98,19 +101,31 @@ async function readEntries() {
  * @returns {Promise<number>} Number of retained diagnostic entries after the save.
  */
 export async function recordDiagnostic(operation, error, debug = false, context = undefined) {
+  return recordDiagnosticEntry(DIAGNOSTIC_KIND.ERROR, operation, String(error?.message ?? error), debug, context, describeError(error));
+}
+
+
+/** Adds a non-fatal, user-visible warning and optionally suppresses an identical persistent condition. @param {string} operation Operation needing attention. @param {string} message Concise warning. @param {object|undefined} context Technical context. @param {string|undefined} deduplicationKey Stable identity for one unresolved condition. @returns {Promise<number>} Retained count. */
+export async function recordDiagnosticWarning(operation, message, context = undefined, deduplicationKey = undefined) {
+  return recordDiagnosticEntry(DIAGNOSTIC_KIND.WARNING, operation, message, false, context, undefined, deduplicationKey);
+}
+
+
+/** Stores one shared diagnostic severity while retaining bounded session history. @param {string} kind Severity. @param {string} operation Operation. @param {string} rawMessage User-facing message. @param {boolean} debug Whether URL details are permitted. @param {object|undefined} context Technical context. @param {object|undefined} error Technical error details. @param {string|undefined} deduplicationKey Stable persistent-condition identity. @returns {Promise<number>} Retained count. */
+function recordDiagnosticEntry(kind, operation, rawMessage, debug, context, error = undefined, deduplicationKey = undefined) {
   const work = diagnosticQueue.catch(() => undefined).then(async () => {
     const entries = await readEntries();
-    const raw = String(error?.message ?? error);
-    const message = debug ? raw : hideUrls(raw);
+    if (deduplicationKey && entries.some((entry) => entry.kind === kind && entry.deduplicationKey === deduplicationKey)) return entries.length;
+    const message = debug ? rawMessage : hideUrls(rawMessage);
+    const technical = { context: copyDiagnosticContext(context) };
+    if (error) technical.error = error;
     const entry = {
-      kind: "error",
+      kind,
       occurredAt: new Date().toISOString(),
       operation: (debug ? operation : hideUrls(operation)).slice(0, 200),
       message: message.slice(0, 4000),
-      technical: {
-        error: describeError(error),
-        context: copyDiagnosticContext(context)
-      }
+      technical,
+      ...(deduplicationKey ? { deduplicationKey: String(deduplicationKey).slice(0, 1000) } : {})
     };
     // Keep the original local session record so a later copy can preserve the rule-editor source trace.
     entries.push(entry);
@@ -124,12 +139,7 @@ export async function recordDiagnostic(operation, error, debug = false, context 
 
 /** Adds a verbose trace without classifying normal explicit synchronization as an error. @param {string} operation Operation. @param {string} message Result. @param {object|undefined} context Technical context. @returns {Promise<number>} Retained count. */
 export async function recordDiagnosticEvent(operation, message, context = undefined) {
-  const work = diagnosticQueue.catch(() => undefined).then(async () => {
-    const entries = await readEntries();
-    entries.push({ kind: "trace", occurredAt: new Date().toISOString(), operation: hideUrls(operation).slice(0, 200), message: hideUrls(message).slice(0, 4000), technical: { context: copyDiagnosticContext(context) } });
-    const retained = entries.slice(-MAXIMUM_DIAGNOSTIC_ENTRIES); await writeSession(DIAGNOSTICS_KEY, retained); return retained.length;
-  });
-  diagnosticQueue = work.catch(() => undefined); return work;
+  return recordDiagnosticEntry(DIAGNOSTIC_KIND.TRACE, operation, message, false, context);
 }
 
 

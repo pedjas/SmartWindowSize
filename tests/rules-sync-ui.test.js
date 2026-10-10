@@ -66,6 +66,10 @@ test("Options exposes a full, copyable client identity and keeps environment dat
   assert.match(source, /environment-sync-log/);
   assert.match(source, /Extension ID: \$\{sync\.extensionId \?\? "—"\}/);
   assert.match(source, /Client ID: \$\{sync\.clientId \?\? "—"\}/);
+  assert.match(source, /Malformed cloud records: \$\{sync\.visibility\.malformed \?\? 0\}/);
+  assert.match(source, /if \(tab === "diagnostics"\) refreshDiagnosticsWhenOpened\(\);/);
+  assert.match(source, /if \(tab === "environmentSync"\) refreshDiagnosticsWhenOpened\(\);/);
+  assert.match(source, /result\.skippedReason === "storage-sync-unavailable" \? "Browser sync storage is unavailable\." : "Sync is disabled\."/);
   assert.match(source, /formatClientIdForDisplay\(rule\.sync\?\.modifiedByClientId, sync\.clientId\)/);
   assert.match(source, /formatClientIdForDisplay\(rule\.sync\?\.modifiedByClientId, config\.sync\?\.clientId\)/);
 });

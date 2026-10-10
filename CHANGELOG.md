@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## 1.2.2 - 2026-10-10
+
+- Refresh Rules Sync Diagnostics after reconciliation and when opened, keeping
+  cloud visibility and Last sync information current, and show malformed
+  cloud-record counts.
+- Surface deduplicated unresolved Rules Sync conflicts as warnings, distinguish
+  unavailable browser sync storage from disabled sync, and warn without
+  blocking a local rule Save when its cloud-state read fails.
+
+# Released
+
 ## 1.2.0 - 2026-10-10
 
 - Start the 1.2 development and release cycle.
@@ -75,8 +86,6 @@
   transient sync read failure no longer blocks local rule Save.
 - Improve release preflight diagnostics with actionable working-tree, branch
   synchronization, version, tag, and GitHub CLI guidance.
-
-# Released
 
 ## 1.1.3 - 2026-10-02
 
@@ -264,7 +273,7 @@
   sizing; manual input selects Custom instead of retaining a stale preset.
 - Map **Automatically set window size if no rules** to the global default-size
   behavior, so custom Width and Height values are applied instead of the
-  previous 1200 Ă„â€šĂ˘â‚¬ĹľÄ‚ËĂ˘â€šÂ¬ÄąË‡Ă„â€šĂ‹ÂÄ‚ËĂ˘â‚¬ĹˇĂ‚Â¬Ä‚ËĂ˘â€šÂ¬ÄąÄ„ 960 default.
+  previous 1200 Ä‚â€žĂ˘â‚¬ĹˇÄ‚ËĂ˘â€šÂ¬ÄąÄľĂ„â€šĂ‹ÂÄ‚ËĂ˘â‚¬ĹˇĂ‚Â¬Ă„Ä…Ă‹â€ˇÄ‚â€žĂ˘â‚¬ĹˇÄ‚â€ąĂ‚ÂĂ„â€šĂ‹ÂÄ‚ËĂ˘â€šÂ¬ÄąË‡Ä‚â€šĂ‚Â¬Ă„â€šĂ‹ÂÄ‚ËĂ˘â‚¬ĹˇĂ‚Â¬Ă„Ä…Ă„â€ž 960 default.
 - Enable Configuration `Width` and `Height` whenever automatic no-rule window
   sizing is enabled, including when a preset is selected.
 - Simplified Configuration default-size labels and aligned the two dimension
