@@ -5,7 +5,7 @@ $source = Get-Content (Join-Path $PSScriptRoot 'commit.ps1') -Raw
 foreach ($required in @('commit-milestone.ps1', 'Assert-VersionConsistency', 'Get-PendingChangelogEntries', '$WhatIfPreference', 'Nothing pushed', 'diff','--diff-filter=U')) {
     if ($source -notmatch [regex]::Escape($required)) { throw "Missing coordinated commit safeguard: $required" }
 }
-if ($source -notmatch "Checking source staged files" -or $source -notmatch "Listing source modified files") { throw 'Dry-run and real commit planning must validate the source index and supply shared-helper descriptions.' }
+if ($source -notmatch "Checking source staged files" -or $source -notmatch "Checking documentation staged files" -or $source -notmatch 'Get-CommitRepositoryPaths' -or $source -notmatch '\$docsPaths') { throw 'Dry-run and real commit planning must validate both indexes and use one parsed path collection for each repository.' }
 $milestone = Get-Content (Join-Path $PSScriptRoot 'commit-milestone.ps1') -Raw
 if ($milestone -notmatch 'IsNullOrWhiteSpace\(\(\$stagedPaths -join') { throw 'Milestone helper must distinguish empty Git output from a staged path.' }
 foreach ($forbidden in @("'push'", "'tag'", "'rebase'", "'merge'", "'reset'")) {
@@ -19,6 +19,10 @@ foreach ($launcher in @('commit-dry-run.bat', 'push-dry-run.bat')) {
 }
 $WhatIfPreference = $true
 Import-Module (Join-Path $PSScriptRoot 'git-workflow.psm1') -Force
+$pathFixture = "MANUAL-TESTS.md`r`nSMOKE-TESTS.md`r`nSPECIFICATION.md`r`nSMART-WINDOW-SIZE-HANDOFF-2026-10-10.md"
+$parsedPaths = @(ConvertFrom-SharedGitPathOutput $pathFixture)
+$invalidPaths = @($parsedPaths | Where-Object { $_ -match "[\r\n]" -or [IO.Path]::IsPathRooted($_) })
+if ($parsedPaths.Count -ne 4 -or $invalidPaths.Count -ne 0) { throw 'Shared Git path conversion must return one safe relative string per path.' }
 $root = Split-Path -Parent $PSScriptRoot
 $gitRoot = Invoke-SharedRepositoryGitCommand -GitPath (Get-Command git).Source -RepositoryPath $root -Arguments @('rev-parse', '--show-toplevel') -Description 'Testing WhatIf-safe Git inspection'
 if ([IO.Path]::GetFullPath($gitRoot) -ne [IO.Path]::GetFullPath($root)) { throw 'WhatIf-safe Git inspection returned an invalid repository path.' }

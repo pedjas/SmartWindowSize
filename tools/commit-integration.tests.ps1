@@ -1,0 +1,121 @@
+<# Real disposable-repository integration checks for coordinated commits. #>
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$git = (Get-Command git -ErrorAction Stop).Source
+$pwsh = (Get-Command pwsh -ErrorAction Stop).Source
+$testRoot = Join-Path ([IO.Path]::GetTempPath()) "SmartWindowSize-commit-integration-$([guid]::NewGuid().ToString('N'))"
+
+function Write-TestFile {
+    param([string]$Path, [string]$Content)
+    $parent = Split-Path -Parent $Path
+    if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+    [IO.File]::WriteAllText($Path, ($Content -replace "`r?`n", "`r`n"), [Text.UTF8Encoding]::new($false))
+}
+
+function Invoke-TestGit {
+    param([string]$Repository, [string[]]$ArgumentList)
+    $output = @(& $git -C $Repository @ArgumentList)
+    if ($LASTEXITCODE -ne 0) { throw "git $($ArgumentList -join ' ') failed: $($output -join [Environment]::NewLine)" }
+    return $output
+}
+
+function Copy-CommitTools {
+    param([string]$SourceRoot)
+    foreach ($name in @('commit.ps1', 'commit-milestone.ps1', 'git-workflow.psm1', 'release-changelog.psm1', 'version-consistency.psm1')) {
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $SourceRoot "tools/$name")
+    }
+}
+
+function New-CommitFixture {
+    param([string]$Name)
+    $source = Join-Path $testRoot $Name
+    $docs = Join-Path $source 'project-docs'
+    New-Item -ItemType Directory -Path (Join-Path $source 'tools'), (Join-Path $source 'core'), (Join-Path $source 'background'), (Join-Path $source 'manifests'), $docs -Force | Out-Null
+    Copy-CommitTools -SourceRoot $source
+    Write-TestFile -Path (Join-Path $source '.gitignore') -Content "project-docs/"
+    Write-TestFile -Path (Join-Path $source 'manifest.json') -Content '{"version":"1.2.14","action":{"default_title":"SmartWindowSize 1.2.14: enabled"}}'
+    Write-TestFile -Path (Join-Path $source 'core/app-version.js') -Content ('/** SmartWindowSize | Version: 1.2.14 | Last updated: now */' + "`n" + 'export const APP_VERSION = "1.2.14";')
+    Write-TestFile -Path (Join-Path $source 'background/service-worker.js') -Content '/** SmartWindowSize | Version: 1.2.14 | Last updated: now */'
+    Write-TestFile -Path (Join-Path $source 'manifests/firefox.manifest.json.template') -Content '{"version":"__VERSION__"}'
+    Write-TestFile -Path (Join-Path $source 'CHANGELOG.md') -Content "# CHANGELOG`n`n- Fixture pending source milestone.`n`n# Released`n`n## 1.0.0 - 2026-01-01`n- Fixture."
+    Invoke-TestGit -Repository $source -ArgumentList @('init', '-q') | Out-Null
+    Invoke-TestGit -Repository $source -ArgumentList @('config', 'user.email', 'commit-test@example.invalid') | Out-Null
+    Invoke-TestGit -Repository $source -ArgumentList @('config', 'user.name', 'Commit Test') | Out-Null
+    Invoke-TestGit -Repository $source -ArgumentList @('add', '--', '.') | Out-Null
+    Invoke-TestGit -Repository $source -ArgumentList @('commit', '-qm', 'source base') | Out-Null
+    Invoke-TestGit -Repository $docs -ArgumentList @('init', '-q') | Out-Null
+    Invoke-TestGit -Repository $docs -ArgumentList @('config', 'user.email', 'commit-test@example.invalid') | Out-Null
+    Invoke-TestGit -Repository $docs -ArgumentList @('config', 'user.name', 'Commit Test') | Out-Null
+    Write-TestFile -Path (Join-Path $docs 'MANUAL-TESTS.md') -Content 'base manual'
+    Write-TestFile -Path (Join-Path $docs 'nested/SMOKE-TESTS.md') -Content 'base nested'
+    Write-TestFile -Path (Join-Path $docs 'file with spaces.md') -Content 'base spaces'
+    Invoke-TestGit -Repository $docs -ArgumentList @('add', '--', '.') | Out-Null
+    Invoke-TestGit -Repository $docs -ArgumentList @('commit', '-qm', 'docs base') | Out-Null
+    return [pscustomobject]@{ Source = $source; Docs = $docs }
+}
+
+function Add-DocumentationChanges {
+    param([pscustomobject]$Fixture)
+    Write-TestFile -Path (Join-Path $Fixture.Docs 'MANUAL-TESTS.md') -Content 'changed manual'
+    Write-TestFile -Path (Join-Path $Fixture.Docs 'nested/SMOKE-TESTS.md') -Content 'changed nested'
+    Write-TestFile -Path (Join-Path $Fixture.Docs 'file with spaces.md') -Content 'changed spaces'
+    Write-TestFile -Path (Join-Path $Fixture.Docs 'SMART-WINDOW-SIZE-HANDOFF-2026-10-10.md') -Content 'new handoff'
+}
+
+function Invoke-CommitWorkflow {
+    param([pscustomobject]$Fixture, [switch]$WhatIf)
+    $arguments = @('-NoProfile', '-File', (Join-Path $Fixture.Source 'tools/commit.ps1'))
+    if ($WhatIf) { $arguments += '-WhatIf' }
+    $output = @(& $pwsh @arguments)
+    if ($LASTEXITCODE -ne 0) { throw "Coordinated commit failed: $($output -join [Environment]::NewLine)" }
+    return $output -join [Environment]::NewLine
+}
+
+function Assert-CleanRepository {
+    param([string]$Repository)
+    $status = @(Invoke-TestGit -Repository $Repository -ArgumentList @('status', '--porcelain=v1', '--untracked-files=all'))
+    if ($status.Count -ne 0) { throw "Repository was not clean: $Repository" }
+}
+
+try {
+    New-Item -ItemType Directory -Path $testRoot | Out-Null
+
+    $docsOnly = New-CommitFixture -Name 'docs-only'
+    Add-DocumentationChanges -Fixture $docsOnly
+    $sourceBefore = (Invoke-TestGit -Repository $docsOnly.Source -ArgumentList @('rev-parse', 'HEAD'))[0]
+    $docsBefore = (Invoke-TestGit -Repository $docsOnly.Docs -ArgumentList @('rev-parse', 'HEAD'))[0]
+    $output = Invoke-CommitWorkflow -Fixture $docsOnly
+    if ($output -notmatch 'Source: clean; skipped' -or $output -notmatch 'Documentation: would commit') { throw 'Docs-only plan did not report source skip and documentation commit.' }
+    if ((Invoke-TestGit -Repository $docsOnly.Source -ArgumentList @('rev-parse', 'HEAD'))[0] -ne $sourceBefore) { throw 'Docs-only commit must not create a source commit.' }
+    if ((Invoke-TestGit -Repository $docsOnly.Docs -ArgumentList @('rev-parse', 'HEAD'))[0] -eq $docsBefore) { throw 'Docs-only commit must create a documentation commit.' }
+    $committedDocs = @(Invoke-TestGit -Repository $docsOnly.Docs -ArgumentList @('show', '--format=', '--name-only', 'HEAD'))
+    foreach ($path in @('MANUAL-TESTS.md', 'nested/SMOKE-TESTS.md', 'file with spaces.md', 'SMART-WINDOW-SIZE-HANDOFF-2026-10-10.md')) { if ($committedDocs -notcontains $path) { throw "Documentation commit omitted '$path'." } }
+    if ($committedDocs.Count -ne 4) { throw 'Documentation commit staged an unexpected path.' }
+    Assert-CleanRepository -Repository $docsOnly.Docs
+
+    $both = New-CommitFixture -Name 'both'
+    Add-DocumentationChanges -Fixture $both
+    Write-TestFile -Path (Join-Path $both.Source 'core/tooling-change.js') -Content 'export const toolingChange = true;'
+    $sourceBefore = (Invoke-TestGit -Repository $both.Source -ArgumentList @('rev-parse', 'HEAD'))[0]
+    $docsBefore = (Invoke-TestGit -Repository $both.Docs -ArgumentList @('rev-parse', 'HEAD'))[0]
+    Invoke-CommitWorkflow -Fixture $both | Out-Null
+    if ((Invoke-TestGit -Repository $both.Source -ArgumentList @('rev-parse', 'HEAD'))[0] -eq $sourceBefore -or (Invoke-TestGit -Repository $both.Docs -ArgumentList @('rev-parse', 'HEAD'))[0] -eq $docsBefore) { throw 'Both-dirty commit must create separate source and documentation commits.' }
+    Assert-CleanRepository -Repository $both.Source; Assert-CleanRepository -Repository $both.Docs
+
+    $dryRun = New-CommitFixture -Name 'dry-run'
+    Add-DocumentationChanges -Fixture $dryRun
+    $docsBefore = @(Invoke-TestGit -Repository $dryRun.Docs -ArgumentList @('rev-parse', 'HEAD'))[0]
+    $output = Invoke-CommitWorkflow -Fixture $dryRun -WhatIf
+    if ($output -notmatch 'Documentation: would commit') { throw 'Dry run must use the parsed documentation path plan.' }
+    if (@(Invoke-TestGit -Repository $dryRun.Docs -ArgumentList @('rev-parse', 'HEAD'))[0] -ne $docsBefore) { throw 'Dry run must not create a documentation commit.' }
+
+    $clean = New-CommitFixture -Name 'clean'
+    $sourceBefore = (Invoke-TestGit -Repository $clean.Source -ArgumentList @('rev-parse', 'HEAD'))[0]
+    $docsBefore = (Invoke-TestGit -Repository $clean.Docs -ArgumentList @('rev-parse', 'HEAD'))[0]
+    Invoke-CommitWorkflow -Fixture $clean | Out-Null
+    if ((Invoke-TestGit -Repository $clean.Source -ArgumentList @('rev-parse', 'HEAD'))[0] -ne $sourceBefore -or (Invoke-TestGit -Repository $clean.Docs -ArgumentList @('rev-parse', 'HEAD'))[0] -ne $docsBefore) { throw 'A clean coordinated commit must not create an empty commit.' }
+    Write-Host 'Coordinated commit disposable-repository integration tests passed.'
+}
+finally {
+    if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }
+}

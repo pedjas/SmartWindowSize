@@ -79,7 +79,7 @@ Assert-VersionConsistency -ProjectRoot $ProjectRoot | Out-Null
 if ($Message -notmatch "\($([regex]::Escape($version))\)$") { throw "Commit message must end with the current version ($version)." }
 
 <# Do not mix this helper's explicit staging operation with an existing index. #>
-$stagedPaths = @(Invoke-ProjectGit -Arguments @('diff', '--cached', '--name-only') -Description 'Checking staged files')
+$stagedPaths = @(ConvertFrom-SharedGitPathOutput (Invoke-ProjectGit -Arguments @('diff', '--cached', '--name-only') -Description 'Checking staged files'))
 if (-not [string]::IsNullOrWhiteSpace(($stagedPaths -join [Environment]::NewLine))) { throw 'Commit milestone helper requires an empty Git index. Unstage existing files or commit them separately.' }
 
 $paths = @($Path | ForEach-Object { Get-RelativeProjectPath -Candidate $_ } | Select-Object -Unique)
