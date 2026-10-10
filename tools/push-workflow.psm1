@@ -1,26 +1,31 @@
 <# Coordinates a safe, already-committed push for the source and documentation repositories. #>
 Set-StrictMode -Version Latest
-Import-Module (Join-Path $PSScriptRoot 'git-workflow.psm1') -Force
+$script:GitWorkflow = Import-Module (Join-Path $PSScriptRoot 'git-workflow.psm1') -Force -PassThru
+
+function Invoke-PushWorkflowGit {
+    param([Parameter(Mandatory)][string]$GitPath, [Parameter(Mandatory)][string]$RepositoryPath, [Parameter(Mandatory)][string[]]$Arguments, [Parameter(Mandatory)][string]$Description)
+    return & $script:GitWorkflow { param($GitPath, $RepositoryPath, $Arguments, $Description) Invoke-SharedRepositoryGitCommand -GitPath $GitPath -RepositoryPath $RepositoryPath -Arguments $Arguments -Description $Description } $GitPath $RepositoryPath $Arguments $Description
+}
 
 function Get-PushRepositoryState {
     param([Parameter(Mandatory)][string]$GitPath, [Parameter(Mandatory)][string]$RepositoryPath, [Parameter(Mandatory)][string]$Name)
 
     if (-not (Test-Path -LiteralPath $RepositoryPath -PathType Container)) { throw "$Name repository is missing: $RepositoryPath" }
-    $root = Invoke-SharedRepositoryGitCommand -GitPath $GitPath -RepositoryPath $RepositoryPath -Arguments @('rev-parse', '--show-toplevel') -Description "Checking $Name Git repository"
+    $root = Invoke-PushWorkflowGit -GitPath $GitPath -RepositoryPath $RepositoryPath -Arguments @('rev-parse', '--show-toplevel') -Description "Checking $Name Git repository"
     if ([System.IO.Path]::GetFullPath($root) -ne [System.IO.Path]::GetFullPath($RepositoryPath)) { throw "$Name path is not its Git repository root: $RepositoryPath" }
-    $status = Invoke-SharedRepositoryGitCommand -GitPath $GitPath -RepositoryPath $RepositoryPath -Arguments @('status', '--porcelain=v1', '--untracked-files=all') -Description "Checking $Name working tree"
-    $branch = Invoke-SharedRepositoryGitCommand -GitPath $GitPath -RepositoryPath $RepositoryPath -Arguments @('branch', '--show-current') -Description "Reading $Name branch"
+    $status = Invoke-PushWorkflowGit -GitPath $GitPath -RepositoryPath $RepositoryPath -Arguments @('status', '--porcelain=v1', '--untracked-files=all') -Description "Checking $Name working tree"
+    $branch = Invoke-PushWorkflowGit -GitPath $GitPath -RepositoryPath $RepositoryPath -Arguments @('branch', '--show-current') -Description "Reading $Name branch"
     if ([string]::IsNullOrWhiteSpace($branch)) { throw "$Name is detached; check out a branch with a configured upstream before pushing." }
-    try { $upstream = Invoke-SharedRepositoryGitCommand -GitPath $GitPath -RepositoryPath $RepositoryPath -Arguments @('rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}') -Description "Reading $Name upstream" }
+    try { $upstream = Invoke-PushWorkflowGit -GitPath $GitPath -RepositoryPath $RepositoryPath -Arguments @('rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}') -Description "Reading $Name upstream" }
     catch { throw "$Name branch '$branch' has no usable configured upstream. Set one before pushing." }
     if ([string]::IsNullOrWhiteSpace($upstream) -or $upstream -notmatch '^(?<remote>[^/]+)/(?<branch>.+)$') { throw "$Name branch '$branch' has no usable configured upstream. Set one before pushing." }
     $remote = $Matches.remote
     $upstreamBranch = $Matches.branch
-    $remoteUrl = Invoke-SharedRepositoryGitCommand -GitPath $GitPath -RepositoryPath $RepositoryPath -Arguments @('remote', 'get-url', $remote) -Description "Reading $Name remote URL"
-    Invoke-SharedRepositoryGitCommand -GitPath $GitPath -RepositoryPath $RepositoryPath -Arguments @('fetch', '--prune', $remote) -Description "Fetching $Name remote state" | Out-Null
-    $head = Invoke-SharedRepositoryGitCommand -GitPath $GitPath -RepositoryPath $RepositoryPath -Arguments @('rev-parse', 'HEAD') -Description "Reading $Name HEAD"
-    $upstreamHead = Invoke-SharedRepositoryGitCommand -GitPath $GitPath -RepositoryPath $RepositoryPath -Arguments @('rev-parse', '@{upstream}') -Description "Reading $Name upstream HEAD"
-    $counts = Invoke-SharedRepositoryGitCommand -GitPath $GitPath -RepositoryPath $RepositoryPath -Arguments @('rev-list', '--left-right', '--count', '@{upstream}...HEAD') -Description "Comparing $Name with its upstream"
+    $remoteUrl = Invoke-PushWorkflowGit -GitPath $GitPath -RepositoryPath $RepositoryPath -Arguments @('remote', 'get-url', $remote) -Description "Reading $Name remote URL"
+    Invoke-PushWorkflowGit -GitPath $GitPath -RepositoryPath $RepositoryPath -Arguments @('fetch', '--prune', $remote) -Description "Fetching $Name remote state" | Out-Null
+    $head = Invoke-PushWorkflowGit -GitPath $GitPath -RepositoryPath $RepositoryPath -Arguments @('rev-parse', 'HEAD') -Description "Reading $Name HEAD"
+    $upstreamHead = Invoke-PushWorkflowGit -GitPath $GitPath -RepositoryPath $RepositoryPath -Arguments @('rev-parse', '@{upstream}') -Description "Reading $Name upstream HEAD"
+    $counts = Invoke-PushWorkflowGit -GitPath $GitPath -RepositoryPath $RepositoryPath -Arguments @('rev-list', '--left-right', '--count', '@{upstream}...HEAD') -Description "Comparing $Name with its upstream"
     if ($counts -notmatch '^(?<behind>\d+)\s+(?<ahead>\d+)$') { throw "Cannot interpret $Name ahead/behind counts: $counts" }
     return [pscustomobject]@{ Name = $Name; Path = [System.IO.Path]::GetFullPath($RepositoryPath); Status = $status; Branch = $branch; Upstream = $upstream; UpstreamBranch = $upstreamBranch; Remote = $remote; RemoteUrl = $remoteUrl; Head = $head; UpstreamHead = $upstreamHead; Behind = [int]$Matches.behind; Ahead = [int]$Matches.ahead }
 }
@@ -42,9 +47,12 @@ function Invoke-CoordinatedPushPlan {
     foreach ($item in $Plan) {
         if ($item.Action -eq 'skip') { continue }
         try { & $PushAction $item.Repository; $completed.Add($item.Repository.Name) }
-        catch { throw "Coordinated push stopped after successful push(es): $($completed -join ', '). $($item.Repository.Name) failed: $($_.Exception.Message)" }
+        catch {
+            if ($completed.Count -eq 0) { throw "Coordinated push failed before any push completed. $($item.Repository.Name) failed: $($_.Exception.Message)" }
+            throw "Coordinated push partially completed for: $($completed -join ', '). $($item.Repository.Name) failed: $($_.Exception.Message)"
+        }
     }
     return @($completed)
 }
 
-Export-ModuleMember -Function Get-PushRepositoryState, Get-CoordinatedPushPlan, Invoke-CoordinatedPushPlan
+Export-ModuleMember -Function Invoke-PushWorkflowGit, Get-PushRepositoryState, Get-CoordinatedPushPlan, Invoke-CoordinatedPushPlan

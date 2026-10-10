@@ -13,7 +13,6 @@ $ErrorActionPreference = 'Stop'
 
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $DocumentationRoot = Join-Path $ProjectRoot 'project-docs'
-Import-Module (Join-Path $PSScriptRoot 'git-workflow.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'push-workflow.psm1') -Force
 
 $git = Get-Command git -ErrorAction SilentlyContinue
@@ -39,7 +38,7 @@ try {
     Invoke-CoordinatedPushPlan -Plan $plan -PushAction {
         param($repository)
         if ($PSCmdlet.ShouldProcess("$($repository.Name) $($repository.Branch) -> $($repository.Upstream)", 'Push already committed work')) {
-            Invoke-SharedRepositoryGitCommand -GitPath $git.Source -RepositoryPath $repository.Path -Arguments @('push', $repository.Remote, "HEAD:refs/heads/$($repository.UpstreamBranch)") -Description "Pushing $($repository.Name)" | Out-Null
+            Invoke-PushWorkflowGit -GitPath $git.Source -RepositoryPath $repository.Path -Arguments @('push', $repository.Remote, "HEAD:refs/heads/$($repository.UpstreamBranch)") -Description "Pushing $($repository.Name)" | Out-Null
         }
     } | Out-Null
 }
