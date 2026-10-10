@@ -33,6 +33,7 @@ $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'release-changelog.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'release-diagnostics.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'version-consistency.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'git-workflow.psm1') -Force
 
 
 <# The GitHub repository that receives every SmartWindowSize Draft Release. #>
@@ -70,53 +71,13 @@ Human-readable operation description used in failures.
 .OUTPUTS
 System.String. Trimmed standard output from the successful native command.
 #>
-function Get-NativeCommandResult {
-    param(
-        [Parameter(Mandatory)]
-        [string]$Executable,
-
-        [Parameter(Mandatory)]
-        [string[]]$Arguments,
-
-        [Parameter(Mandatory)]
-        [string]$Description
-    )
-
-    # Redirect stderr so expected Git status output cannot become a PowerShell terminating error.
-    $stderrPath = Join-Path ([System.IO.Path]::GetTempPath()) "SmartWindowSize-native-$([guid]::NewGuid().ToString('N')).stderr"
-    $previousErrorActionPreference = $ErrorActionPreference
-    $stdout = @()
-    $stderr = ''
-    $exitCode = $null
-    try {
-        $ErrorActionPreference = 'Continue'
-        $PSNativeCommandUseErrorActionPreference = $false
-        $stdout = @(& $Executable @Arguments 2> $stderrPath)
-        $exitCode = $LASTEXITCODE
-        $stderr = if (Test-Path -LiteralPath $stderrPath) { Get-Content -LiteralPath $stderrPath -Raw } else { '' }
-    }
-    finally {
-        $ErrorActionPreference = $previousErrorActionPreference
-        if (Test-Path -LiteralPath $stderrPath) { Remove-Item -LiteralPath $stderrPath -Force }
-    }
-    $standardOutput = [string]::Empty + (($stdout | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine)
-    $standardError = [string]::Empty + $stderr
-    return [pscustomobject]@{ ExitCode = $exitCode; StandardOutput = $standardOutput.Trim(); StandardError = $standardError.Trim() }
-}
-
-
 function Invoke-NativeCommand {
     param(
         [Parameter(Mandatory)][string]$Executable,
         [Parameter(Mandatory)][string[]]$Arguments,
         [Parameter(Mandatory)][string]$Description
     )
-    $result = Get-NativeCommandResult -Executable $Executable -Arguments $Arguments -Description $Description
-    if ($result.ExitCode -ne 0) {
-        $details = @($result.StandardOutput, $result.StandardError) -join [Environment]::NewLine
-        throw "$Description failed with exit code $($result.ExitCode).`n$details"
-    }
-    return $result.StandardOutput
+    return Invoke-SharedNativeCommand -Executable $Executable -Arguments $Arguments -Description $Description
 }
 
 
@@ -148,10 +109,7 @@ function Invoke-RepositoryGitCommand {
         [string]$Description
     )
 
-    # Git safe.directory is scoped to this invocation and normalized for Git's cross-platform path matching.
-    $safeDirectory = $ProjectRoot -replace '\\', '/'
-    $repositoryArguments = @('-c', "safe.directory=$safeDirectory", '-C', $ProjectRoot) + $Arguments
-    return Invoke-NativeCommand -Executable $GitPath -Arguments $repositoryArguments -Description $Description
+    return Invoke-SharedRepositoryGitCommand -GitPath $GitPath -RepositoryPath $ProjectRoot -Arguments $Arguments -Description $Description
 }
 
 

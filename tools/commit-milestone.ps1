@@ -27,6 +27,8 @@ $ProjectRoot = Split-Path -Parent $PSScriptRoot
 
 Import-Module (Join-Path $PSScriptRoot 'release-changelog.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'version-consistency.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'git-workflow.psm1') -Force
+$GitPath = (Get-Command git -ErrorAction Stop).Source
 
 
 <#
@@ -42,9 +44,7 @@ Human-readable operation description used in failures.
 function Invoke-ProjectGit {
     param([Parameter(Mandatory)][string[]]$Arguments, [Parameter(Mandatory)][string]$Description)
 
-    $safeDirectory = $ProjectRoot -replace '\\', '/'
-    & git -c "safe.directory=$safeDirectory" -C $ProjectRoot @Arguments
-    if ($LASTEXITCODE -ne 0) { throw "$Description failed with exit code $LASTEXITCODE." }
+    return Invoke-SharedRepositoryGitCommand -GitPath $GitPath -RepositoryPath $ProjectRoot -Arguments $Arguments -Description $Description
 }
 
 
@@ -80,7 +80,7 @@ if ($Message -notmatch "\($([regex]::Escape($version))\)$") { throw "Commit mess
 
 <# Do not mix this helper's explicit staging operation with an existing index. #>
 $stagedPaths = @(Invoke-ProjectGit -Arguments @('diff', '--cached', '--name-only') -Description 'Checking staged files')
-if ($stagedPaths.Count -gt 0) { throw 'Commit milestone helper requires an empty Git index. Unstage existing files or commit them separately.' }
+if (-not [string]::IsNullOrWhiteSpace(($stagedPaths -join [Environment]::NewLine))) { throw 'Commit milestone helper requires an empty Git index. Unstage existing files or commit them separately.' }
 
 $paths = @($Path | ForEach-Object { Get-RelativeProjectPath -Candidate $_ } | Select-Object -Unique)
 $changelogPath = Join-Path $ProjectRoot 'CHANGELOG.md'
