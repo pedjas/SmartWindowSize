@@ -1,5 +1,5 @@
 /**
- * SmartWindowSize | Version: 1.2.14 | Last updated: 2026-10-10 14:07:21 +02:00
+ * SmartWindowSize | Version: 1.2.22 | Last updated: 2026-10-11 17:00:00 +02:00
  *
  * Coordinates serialized window operations, validated configuration writes,
  * unique dialogs, and session diagnostics.
@@ -50,6 +50,8 @@ const boundsChangedEvent = browserWindowEvents?.onBoundsChanged;
 
 /** Session key for normal site windows whose matching rules need geometry persistence. @type {string} */
 const GEOMETRY_TRACKS_KEY = "geometryTracks";
+const VIRTUAL_RULES_KEY = "virtualDefaultRules";
+let virtualRuleQueue = Promise.resolve();
 
 /** Per-window timers that persist one stabilized user geometry. @type {Map<number, ReturnType<typeof setTimeout>>} */
 const geometryDebounceTimers = new Map();
@@ -448,6 +450,50 @@ async function takeDependentDialogsForClosedWindow(windowId) {
 /** Returns the ephemeral state key for one window. @param {number} id Window ID. @returns {string} Session key. */
 function windowKey(id) { return `windowState:${id}`; }
 
+/** Serializes session-only virtual domain-rule changes across browser windows. @template T @param {() => Promise<T>} operation Session registry operation. @returns {Promise<T>} Completion. */
+function withVirtualRules(operation) {
+  virtualRuleQueue = virtualRuleQueue.catch(() => undefined).then(operation);
+  return virtualRuleQueue;
+}
+
+/** Reads the one authoritative session-only virtual registry. @returns {Promise<object>} Registry. */
+async function readVirtualRules() { return await readSession(VIRTUAL_RULES_KEY) ?? {}; }
+
+/** Writes the one authoritative session-only virtual registry. @param {object} rules Registry. @returns {Promise<void>} Completion. */
+async function writeVirtualRules(rules) { await writeSession(VIRTUAL_RULES_KEY, rules); }
+
+/** Notifies open extension views after a meaningful virtual-registry mutation. @returns {Promise<void>} Best effort completion. */
+async function notifyVirtualRulesChanged() { await chrome.runtime.sendMessage({ type: "virtual-rules-changed" }).catch(() => undefined); }
+
+/** Resolves a real rule first, then a session-only domain-tree virtual rule. @param {string} url Current URL. @param {object} config Current configuration. @returns {Promise<object>} Effective resolution. */
+async function resolveEffectiveRule(url, config) {
+  const real = resolveRule(url, config);
+  if (real.status === "RULE" || real.status === "DISABLED") return real;
+  const domain = scopeForUrl(url, "domain_tree");
+  if (!domain) return real;
+  return withVirtualRules(async () => {
+    const rules = await readVirtualRules();
+    const existing = rules[domain];
+    if (existing) return { status: "VIRTUAL", reason: "session-domain-tree", rule: null, size: { width: existing.width, height: existing.height }, virtual: { domain } };
+    if (real.status !== "DEFAULT") return real;
+    rules[domain] = { width: real.size.width, height: real.size.height };
+    await writeVirtualRules(rules); await notifyVirtualRulesChanged();
+    return { status: "VIRTUAL", reason: "session-domain-tree", rule: null, size: { ...real.size }, virtual: { domain } };
+  });
+}
+
+/** Retains a manual size in the session-only virtual rule for its domain. @param {string} url Current URL. @param {number} width Width. @param {number} height Height. @returns {Promise<void>} Completion. */
+async function updateVirtualRuleDimensions(url, width, height) {
+  const domain = scopeForUrl(url, "domain_tree");
+  if (!domain) return;
+  await withVirtualRules(async () => {
+    const rules = await readVirtualRules();
+    if (!rules[domain]) return;
+    rules[domain] = { width, height };
+    await writeVirtualRules(rules); await notifyVirtualRulesChanged();
+  });
+}
+
 
 /** Excludes extension dialogs and nonstandard browser windows from automatic site handling. @param {object} window Browser window. @returns {boolean} Whether this is a website window. */
 function isSiteWindow(window) { return !window.type || window.type === "normal"; }
@@ -585,9 +631,9 @@ function scheduleFirefoxGeometryPoll(windowId) {
 }
 
 
-/** Starts or refreshes tracking for a normal active site window with a resolved enabled rule. @param {object} tab Active site tab. @param {object} window Browser window. @param {string} ruleId Resolved rule identifier. @returns {Promise<void>} Completion after session tracking is stored. */
-async function trackWindowGeometry(tab, window, ruleId) {
-  if (!isFirefoxWindowRuntime || !isSiteWindow(window) || window.state !== "normal" || !tab?.url || !ruleId) return;
+/** Starts or refreshes tracking for a normal active site window with a size-owning effective context. @param {object} tab Active site tab. @param {object} window Browser window. @returns {Promise<void>} Completion after session tracking is stored. */
+async function trackWindowGeometry(tab, window) {
+  if (!isFirefoxWindowRuntime || !isSiteWindow(window) || window.state !== "normal" || !tab?.url) return;
   const geometry = capturedWindowGeometry(window);
   await withGeometryTracks((tracks) => {
     const previous = tracks[window.id] ?? {};
@@ -596,7 +642,6 @@ async function trackWindowGeometry(tab, window, ruleId) {
       windowId: window.id,
       tabId: tab.id,
       url: tab.url,
-      ruleId,
       lastKnownGeometry: geometry,
       lastGeometryReadAt: new Date().toISOString()
     };
@@ -612,20 +657,12 @@ async function isExpectedProgrammaticGeometry(windowId, geometry) {
 }
 
 
-/** Persists one stabilized tracked window geometry and reports only failures through production Diagnostics. @param {object} track Tracked normal window state. @returns {Promise<void>} Completion after the configuration write and read-back validation. */
+/** Persists one stabilized tracked window geometry through its current real-or-virtual effective context. @param {object} track Tracked normal window state. @returns {Promise<void>} Completion after persistence. */
 async function persistTrackedGeometry(track) {
   const geometry = track?.lastKnownGeometry;
   if (!track?.url || !geometry || geometry.state !== "normal" || !Number.isInteger(geometry.width) || !Number.isInteger(geometry.height)) return;
   try {
-    let updatedRuleId = null;
-    const saved = await updateConfig((config) => {
-      const update = updateRuleForResize(config, { url: track.url, position: { x: geometry.left, y: geometry.top } }, geometry.width, geometry.height);
-      updatedRuleId = update.rule?.id ?? null;
-      return update.changed ? update.config : undefined;
-    });
-    const stored = updatedRuleId ? saved.rules.find((rule) => rule.id === updatedRuleId) ?? null : null;
-    if (!stored) throw new Error("No matching enabled rule accepted the tracked window geometry.");
-    if (stored.width !== geometry.width || stored.height !== geometry.height) throw new Error("Stored window geometry could not be verified.");
+    await persistUserBounds({ url: track.url }, geometry);
   } catch (error) {
     await reportDiagnostic("Persist window geometry", error);
   }
@@ -739,6 +776,12 @@ async function changeWindow(id, operation) {
 async function persistUserBounds(tab, window) {
   if (!tab?.url || window.state !== "normal") return;
   const display = await displayForRule(null, window);
+  const config = await loadConfig();
+  const resolved = await resolveEffectiveRule(tab.url, config);
+  if (resolved.status === "VIRTUAL") {
+    await updateVirtualRuleDimensions(tab.url, window.width, window.height);
+    return;
+  }
   await updateConfig((config) => {
     const update = updateRuleForResize(config, { url: tab.url, position: { x: window.left, y: window.top }, displayId: display?.id }, window.width, window.height);
     return update.changed ? update.config : undefined;
@@ -780,8 +823,8 @@ async function applyForTab(tab, useSavedPosition = false, traceSource = { eventN
       return;
     }
     const config = await loadConfig();
-    const resolved = resolveRule(finalUrl, config);
-    if (resolved.status === "RULE") await trackWindowGeometry(tab, window, resolved.rule.id);
+    const resolved = await resolveEffectiveRule(finalUrl, config);
+    if (["RULE", "VIRTUAL"].includes(resolved.status)) await trackWindowGeometry(tab, window);
     await synchronizeActionIcon(tab.id, resolved);
     if (resolved.status === "DISABLED") {
       await writeSession(windowKey(window.id), { bounds: window, state: window.state });
@@ -792,7 +835,7 @@ async function applyForTab(tab, useSavedPosition = false, traceSource = { eventN
       if (!currentTab) return false;
       const currentConfig = await loadConfig();
       return currentTab.active && currentTab.windowId === tab.windowId && currentTab.url === tab.url && isSupportedSiteUrl(currentTab.url) &&
-        fingerprint(resolveRule(tab.url ?? "", currentConfig)) === fingerprint(resolved);
+        fingerprint(await resolveEffectiveRule(tab.url ?? "", currentConfig)) === fingerprint(resolved);
     };
     if (!await canApply()) return;
     const rememberExpectedGeometry = async (updateInfo) => {
@@ -999,6 +1042,14 @@ async function dispatchRequest(message, sender = {}) {
 async function dispatchAction(message, sender, registry) {
   if (message.type === "get-app-version") return { version: APP_VERSION };
   if (message.type === "get-configuration") return { config: await loadConfig(), rulesLocked: registry.owner !== null };
+  if (message.type === "get-virtual-rules") {
+    const rules = await readVirtualRules();
+    return { rules: Object.entries(rules).filter(([, size]) => Number.isInteger(size?.width) && Number.isInteger(size?.height)).map(([domain, size]) => ({ domain, width: size.width, height: size.height })).sort((a, b) => a.domain.localeCompare(b.domain)) };
+  }
+  if (message.type === "clear-virtual-rules") {
+    await withVirtualRules(async () => { await removeSession(VIRTUAL_RULES_KEY); await notifyVirtualRulesChanged(); });
+    return { ok: true };
+  }
   if (message.type === "focus-rule-editor") {
     editorRecord(registry, message);
     const owner = registry.entries[registry.owner];
@@ -1280,6 +1331,7 @@ function handleExtensionRequest(message, sender, sendResponse) {
 
 /** Initializes missing baselines without treating browser startup as a user resize. @returns {Promise<void>} Completion. */
 async function initialize() {
+  await chrome.storage.local.remove("virtualRulesBrowserSession");
   await chrome.storage.local.remove(["debug.lastWindowRemoved", "debug.lastBoundsChanged"]);
   await removeSession("eliteDiagnosticWindows");
   await resumeFirefoxGeometryPolling();

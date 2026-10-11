@@ -8,6 +8,11 @@ body { font: 15px system-ui, sans-serif; color: #18212f; background: #f8fafc; ma
 #error { color: #b42318; margin: 0; }
 #error:empty { display: none; }
 .rules-list { display: grid; gap: 12px; }
+.virtual-rules-list { --virtual-rule-columns: minmax(0, 1fr) auto; display: grid; gap: 4px; }
+.virtual-rules-row { display: grid; grid-template-columns: var(--virtual-rule-columns); gap: 16px; align-items: baseline; font-size: 14px; }
+.virtual-rules-row > :first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.virtual-rules-row > :last-child { text-align: right; white-space: nowrap; }
+.virtual-rules-header { color: #52606d; font-size: 12px; font-weight: 600; }
 .rule-card { display: grid; gap: 10px; padding: 14px; border: 1px solid #cbd5e1; border-radius: 7px; background: #fff; }
 .rule-card-header { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
 .rule-card h3 { margin: 0; font-size: 14px; font-weight: 500; }

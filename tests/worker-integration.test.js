@@ -1300,6 +1300,136 @@ test("default sizing and extension-generated bounds cannot create or overwrite r
 });
 
 
+test("session virtual domain rules retain manual no-rule dimensions through reloads, paths, and worker restart", async () => {
+  const browser = await browserFixture();
+  Object.assign(browser.local.smartWindowSizeConfig.global, { useDefaultSize: true, automaticWidth: 1400, automaticHeight: 800 });
+  const tab = browser.tabs.get(1);
+  tab.url = "https://unmatched.example/";
+  await browser.apply(tab);
+  assert.deepEqual({ width: browser.windows.get(7).width, height: browser.windows.get(7).height }, { width: 1400, height: 800 });
+  const afterInitialDefault = browser.updates.length;
+
+  Object.assign(browser.windows.get(7), { width: 975, height: 725 });
+  browser.listeners.bounds(structuredClone(browser.windows.get(7)));
+  await browser.settle();
+  await browser.runTimers();
+  assert.equal(browser.local.smartWindowSizeConfig.rules.length, 0);
+
+  browser.listeners.updated(tab.id, { status: "complete" }, structuredClone(tab));
+  await browser.settle();
+  tab.url = "https://unmatched.example/another/path?route=spa";
+  browser.listeners.updated(tab.id, { url: tab.url, status: "complete" }, structuredClone(tab));
+  await browser.settle();
+  browser.listeners.updated(tab.id, { status: "complete" }, structuredClone(tab));
+  await browser.settle();
+  assert.equal(browser.updates.length, afterInitialDefault);
+  assert.deepEqual({ width: browser.windows.get(7).width, height: browser.windows.get(7).height }, { width: 975, height: 725 });
+  assert.deepEqual(browser.ephemeral.virtualDefaultRules["unmatched.example"], { width: 975, height: 725 });
+  await browser.restart();
+  await browser.apply(tab);
+  assert.equal(browser.windows.get(7).width, 975);
+
+  await browser.closeWindow(7);
+  assert.equal(browser.ephemeral["windowState:7"], undefined);
+  assert.deepEqual(browser.ephemeral.virtualDefaultRules["unmatched.example"], { width: 975, height: 725 });
+});
+
+
+test("virtual domains seed independently, retain existing sizes across default changes, and yield to real rules", async () => {
+  const browser = await browserFixture([rule("url_subpaths", "https://matched.example/special", 800)]);
+  Object.assign(browser.local.smartWindowSizeConfig.global, { useDefaultSize: true, automaticWidth: 1200, automaticHeight: 960 });
+  const tab = browser.tabs.get(1);
+  tab.url = "https://example.com/first";
+  await browser.apply(tab);
+  Object.assign(browser.windows.get(7), { width: 1450, height: 1000 });
+  browser.listeners.bounds(structuredClone(browser.windows.get(7))); await browser.settle(); await browser.runTimers();
+  Object.assign(browser.local.smartWindowSizeConfig.global, { automaticWidth: 1300, automaticHeight: 900 });
+  tab.url = "https://another.example/first";
+  await browser.apply(tab);
+  assert.deepEqual(browser.ephemeral.virtualDefaultRules, { "example.com": { width: 1450, height: 1000 }, "another.example": { width: 1300, height: 900 } });
+  tab.url = "https://example.com/special";
+  await browser.apply(tab);
+  assert.equal(browser.windows.get(7).width, 1450);
+  tab.url = "https://matched.example/special/page";
+  await browser.apply(tab);
+  assert.equal(browser.windows.get(7).width, 800);
+});
+
+
+test("disabled real rules fall through to one session-global virtual domain rule across windows and reseed after browser-session reset", async () => {
+  const disabled = rule("domain_tree", "disabled.example", 800);
+  disabled.enabled = false;
+  const browser = await browserFixture([disabled], false, true, undefined, undefined, true);
+  const cloudBeforeVirtualSizing = structuredClone(browser.cloud);
+  Object.assign(browser.local.smartWindowSizeConfig.global, { useDefaultSize: true, automaticWidth: 1200, automaticHeight: 900 });
+  const firstTab = browser.tabs.get(1);
+  firstTab.url = "https://disabled.example/first";
+  await browser.apply(firstTab);
+  assert.equal(browser.windows.get(7).width, 1200);
+  assert.deepEqual(browser.ephemeral.virtualDefaultRules["disabled.example"], { width: 1200, height: 900 });
+  assert.deepEqual(browser.cloud, cloudBeforeVirtualSizing);
+
+  browser.windows.set(8, { id: 8, type: "normal", state: "normal", left: 20, top: 20, width: 700, height: 500 });
+  browser.tabs.set(3, { id: 3, windowId: 8, active: true, url: "https://disabled.example/other" });
+  await browser.apply(browser.tabs.get(3));
+  assert.deepEqual({ width: browser.windows.get(8).width, height: browser.windows.get(8).height }, { width: 1200, height: 900 });
+
+  Object.assign(browser.windows.get(8), { width: 1111, height: 777 });
+  browser.listeners.bounds(structuredClone(browser.windows.get(8))); await browser.settle(); await browser.runTimers();
+  assert.deepEqual(browser.ephemeral.virtualDefaultRules["disabled.example"], { width: 1111, height: 777 });
+  await browser.apply(firstTab);
+  assert.deepEqual({ width: browser.windows.get(7).width, height: browser.windows.get(7).height }, { width: 1111, height: 777 });
+
+  delete browser.ephemeral.virtualDefaultRules;
+  Object.assign(browser.local.smartWindowSizeConfig.global, { automaticWidth: 1300, automaticHeight: 850 });
+  firstTab.url = "https://fresh.example/";
+  await browser.apply(firstTab);
+  assert.deepEqual(browser.ephemeral.virtualDefaultRules, { "fresh.example": { width: 1300, height: 850 } });
+  assert.deepEqual(browser.cloud, cloudBeforeVirtualSizing);
+
+  await browser.closeWindow(7);
+  await browser.closeWindow(8);
+  assert.deepEqual(browser.ephemeral.virtualDefaultRules, { "fresh.example": { width: 1300, height: 850 } });
+});
+
+test("clearing virtual rules leaves saved configuration and sync untouched until a later no-rule resolution reseeds", async () => {
+  const browser = await browserFixture([], false, true, undefined, undefined, true);
+  Object.assign(browser.local.smartWindowSizeConfig.global, { useDefaultSize: true, automaticWidth: 1200, automaticHeight: 900 });
+  const tab = browser.tabs.get(1); tab.url = "https://clear.example/";
+  await browser.apply(tab);
+  const beforeConfig = structuredClone(browser.local.smartWindowSizeConfig);
+  const beforeCloud = structuredClone(browser.cloud);
+  await browser.dispatch({ type: "clear-virtual-rules" });
+  assert.equal(browser.ephemeral.virtualDefaultRules, undefined);
+  assert.deepEqual(browser.local.smartWindowSizeConfig, beforeConfig);
+  assert.deepEqual(browser.cloud, beforeCloud);
+  assert.equal(browser.updates.length, 0);
+  Object.assign(browser.local.smartWindowSizeConfig.global, { automaticWidth: 1300, automaticHeight: 850 });
+  await browser.apply(tab);
+  assert.deepEqual(browser.ephemeral.virtualDefaultRules, { "clear.example": { width: 1300, height: 850 } });
+});
+
+
+test("default-disabled no-rule tabs remain unchanged and explicit rules still reapply on completion", async () => {
+  const noRule = await browserFixture();
+  const noRuleTab = noRule.tabs.get(1);
+  noRuleTab.url = "https://unmatched.example/";
+  noRule.listeners.updated(noRuleTab.id, { status: "complete" }, structuredClone(noRuleTab));
+  await noRule.settle();
+  assert.equal(noRule.updates.length, 0);
+
+  const explicit = await browserFixture([rule()]);
+  const explicitTab = explicit.tabs.get(1);
+  await explicit.apply(explicitTab);
+  Object.assign(explicit.windows.get(7), { width: 975, height: 725 });
+  const beforeReload = explicit.updates.length;
+  explicit.listeners.updated(explicitTab.id, { status: "complete" }, structuredClone(explicitTab));
+  await explicit.settle();
+  assert.equal(explicit.updates.length, beforeReload + 1);
+  assert.equal(explicit.windows.get(7).width, 800);
+});
+
+
 test("browser and extension UI URLs never trigger website or automatic window sizing", async () => {
   const browser = await browserFixture();
   Object.assign(browser.local.smartWindowSizeConfig.global, { useDefaultSize: true, automaticWidth: 1400, automaticHeight: 800 });

@@ -40,20 +40,22 @@ document.querySelector("#application-title").textContent = `SmartWindowSize ${AP
 
 /** Switches between Configuration and Diagnostics without leaving the options page. @param {string} tab Requested tab name. @returns {void} Updates visible panel and URL fragment. */
 function selectOptionsTab(tab) {
-  const panels = { configuration: "configuration-panel", rules: "rules-panel", diagnostics: "diagnostics" };
-  for (const [name, panel] of Object.entries(panels)) {
-    document.querySelector(`#${panel}`).hidden = name !== tab;
-    document.querySelector(`#${name}-tab`).setAttribute("aria-selected", String(name === tab));
+  const panels = { configuration: { panel: "configuration-panel", control: "configuration-tab" }, rules: { panel: "rules-panel", control: "rules-tab" }, virtualRules: { panel: "virtual-rules-panel", control: "virtual-rules-tab" }, diagnostics: { panel: "diagnostics", control: "diagnostics-tab" } };
+  for (const [name, entry] of Object.entries(panels)) {
+    document.querySelector(`#${entry.panel}`).hidden = name !== tab;
+    document.querySelector(`#${entry.control}`).setAttribute("aria-selected", String(name === tab));
   }
   history.replaceState(null, "", `#${tab}`);
   if (tab === "diagnostics") refreshDiagnosticsWhenOpened();
+  if (tab === "virtualRules") refreshVirtualRules().catch((error) => showClientError("Refresh virtual rules", error));
 }
 
 
 document.querySelector("#configuration-tab").addEventListener("click", () => selectOptionsTab("configuration"));
 document.querySelector("#rules-tab").addEventListener("click", () => selectOptionsTab("rules"));
+document.querySelector("#virtual-rules-tab").addEventListener("click", () => selectOptionsTab("virtualRules"));
 document.querySelector("#diagnostics-tab").addEventListener("click", () => selectOptionsTab("diagnostics"));
-selectOptionsTab(["#rules", "#diagnostics"].includes(location.hash) ? location.hash.slice(1) : "configuration");
+selectOptionsTab(["#rules", "#virtualRules", "#diagnostics"].includes(location.hash) ? location.hash.slice(1) : "configuration");
 
 /** Switches the lightweight Diagnostics sub-tab without affecting its event data. @param {string} tab Requested Diagnostics view. */
 function selectDiagnosticsTab(tab) {
@@ -321,6 +323,22 @@ function createRuleDetail(label, value) {
   return detail;
 }
 
+/** Reads and renders the authoritative session-only virtual domain registry. @returns {Promise<void>} Completion after current values render. */
+async function refreshVirtualRules() {
+  const response = await request({ type: "get-virtual-rules" });
+  const rules = response?.rules ?? [];
+  document.querySelector("#virtual-rules-empty").hidden = rules.length !== 0;
+  for (const button of document.querySelectorAll(".clear-virtual-rules")) button.disabled = rules.length === 0;
+  const header = document.createElement("div"); header.className = "virtual-rules-row virtual-rules-header";
+  header.append(Object.assign(document.createElement("span"), { textContent: "Domain" }), Object.assign(document.createElement("span"), { textContent: "Size" }));
+  document.querySelector("#virtual-rules").replaceChildren(header, ...rules.map((rule) => {
+    const row = document.createElement("div"); row.className = "virtual-rules-row";
+    const domain = document.createElement("span"); domain.textContent = rule.domain; domain.title = rule.domain;
+    const size = document.createElement("span"); size.textContent = `${rule.width} × ${rule.height}`;
+    row.append(domain, size); return row;
+  }));
+}
+
 
 /** Returns the stored local display identifier without inventing unavailable display metadata. @param {object} rule Saved rule. @returns {string} Local monitor value or neutral marker. */
 function rememberedMonitorValue(rule) {
@@ -462,6 +480,10 @@ document.querySelector("#reset").addEventListener("click", () => {
   if (rulesLocked) return;
   if (confirm("Reset all configuration?")) mutate({ type: "reset-configuration", base: config }, true, { button: document.querySelector("#reset"), labels: { working: "Resetting…", success: "Reset ✓" } });
 });
+for (const button of document.querySelectorAll("#clear-virtual-rules, #clear-virtual-rules-top")) {
+  button.classList.add("clear-virtual-rules");
+  button.addEventListener("click", () => { if (confirm("Clear all virtual rules for this browser session?")) runButtonFeedback(button, { working: "Clearing…", success: "Cleared ✓" }, async () => { await request({ type: "clear-virtual-rules" }); await refreshVirtualRules(); }); });
+}
 document.querySelector("#open-readme").addEventListener("click", () => runClientAction("Open local README", () => request({ type: "open-local-readme" })));
 document.querySelector("#copy-diagnostics").addEventListener("click", () => runClientAction("Copy diagnostics", copyDiagnostics));
 document.querySelector("#clear-diagnostics").addEventListener("click", () => runClientAction("Clear diagnostics", async () => {
@@ -471,6 +493,7 @@ document.querySelector("#clear-diagnostics").addEventListener("click", () => run
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === "diagnostics-changed") renderDiagnostics().catch((error) => { document.querySelector("#diagnostic-status").textContent = error.message; });
   if (message.type === "rule-editors-changed") refreshRuleAccess().catch((error) => showClientError("Refresh rule access", error));
+  if (message.type === "virtual-rules-changed" && !document.querySelector("#virtual-rules-panel").hidden) refreshVirtualRules().catch((error) => showClientError("Refresh virtual rules", error));
 });
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes[KEY]) {

@@ -55,7 +55,7 @@ async function backgroundFixture() {
     readSession: async (key) => structuredClone(session.get(key)),
     writeSession: async (key, value) => session.set(key, structuredClone(value)),
     removeSession: async (key) => session.delete(key),
-    loadConfig: async () => config, resolveRule, matchingRulesForUrl,
+    loadConfig: async () => config, resolveRule, matchingRulesForUrl, scopeForUrl,
     toUrl: (value) => { try { return new URL(value); } catch { return null; } },
     createContextMenus: async () => {}, registerContextMenuActions: () => {},
     loadDiagnostics: async () => [], recordDiagnostic: async () => {},
