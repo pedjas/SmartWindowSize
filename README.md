@@ -19,11 +19,14 @@ With the extension enabled and no matching rule, the window is kept visible:
 its position is corrected first, and its size is reduced only if necessary.
 Sizes are not remembered automatically by default.
 
-- **Automatically set window size if no rules** optionally applies the saved
-  Configuration Width and Height to a newly opened window when its website has
-  no saved rule. A completely new Configuration begins at 1200 × 960, but your
-  saved Width and Height always replace those initial values. Applying it does
-  not create a website rule or change the saved values when the screen is
+- **Automatically set window size if no rules** permits creating a temporary,
+  session-only Virtual Rule from the saved Configuration Width and Height when
+  a domain has neither an enabled saved Rule nor an existing Virtual Rule. A
+  completely new Configuration begins at 1200 × 960, but your saved Width and
+  Height always replace those initial values. Turning the option off prevents
+  new Virtual Rules only: existing Virtual Rules remain active and keep their
+  manually remembered size until cleared or the browser session ends. This
+  never creates a saved website Rule or changes saved values when the screen is
   smaller.
 - Maximized and fullscreen windows are exempt from automatic resizing and
   saving. Rules are reconsidered when the window returns to normal.
@@ -188,17 +191,23 @@ The toolbar right-click menu provides **Bring window on screen**,
 **About SmartWindowSize**. The browser may supply its own Options entry.
 About opens a single dialog containing the name, version, purpose, and OK button.
 
-Configuration has three tabs:
+Configuration has four tabs:
 
 - **Configuration**: global enable switch, optional automatic window size, rule
   retention, Diagnostics detail, and JSON backup/import/reset. It also shows
   the complete local sync client ID with a Copy action.
 - **Rules**: saved rules with scope, value, size, Remember position, position as
   `x,y`, enabled state, effective scope, sync status, last update, and actions.
+  Its label shows the current number of saved Rules, including disabled Rules.
   **Refresh from cloud** stays in the action row and retains local geometry.
   An empty list says **No rules defined**.
   **Rule scopes description** links to the explanations below the table.
   Editing from this general list is deferred; use the site dialog to edit.
+- **Virtual Rules**: session-only Domain / Size entries shared across browser
+  windows. Enabled saved Rules take priority. **Clear All** removes only these
+  temporary entries; while automatic no-rule sizing is off, cleared entries are
+  not recreated until it is enabled again. Its label shows the live number of
+  session entries.
 - **Diagnostics**: session-local errors with copy and clear actions. The tab
   turns red when errors are present.
 

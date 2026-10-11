@@ -11,6 +11,10 @@ test("Virtual Rules Configuration surface follows Rules and uses worker-owned re
   assert.match(html, /id="clear-virtual-rules"/);
   assert.match(source, /request\(\{ type: "get-virtual-rules" \}\)/);
   assert.match(source, /request\(\{ type: "clear-virtual-rules" \}\)/);
+  assert.match(source, /function renderTabCount\(tabId, label, items\)/);
+  assert.match(source, /renderTabCount\("virtual-rules-tab", "Virtual Rules", rules\)/);
+  assert.match(source, /message\.type === "virtual-rules-changed"\) refreshVirtualRules/);
+  assert.match(source, /refreshVirtualRules\(\)\.catch\(\(error\) => showClientError\("Refresh virtual rules", error\)\)/);
   assert.match(html, /id="clear-virtual-rules-top"/);
   assert.match(html, /virtual-rules-row virtual-rules-header/);
   assert.match(virtualRenderer, /className = "virtual-rules-row"/);
@@ -19,4 +23,11 @@ test("Virtual Rules Configuration surface follows Rules and uses worker-owned re
   assert.doesNotMatch(virtualRenderer, /domain_tree\|\$\{rule\.domain\}/);
   assert.doesNotMatch(virtualRenderer, /className = "rule-card"/);
   assert.doesNotMatch(source, /setInterval\(/);
+});
+
+test("Rules tab count derives from the same rendered real-rule collection", async () => {
+  const source = await readFile(new URL("../options/options.js", import.meta.url), "utf8");
+  const renderer = source.slice(source.indexOf("function renderRules"), source.indexOf("/** Sends a granular write"));
+  assert.match(renderer, /renderTabCount\("rules-tab", "Rules", config\.rules\)/);
+  assert.match(source, /await refreshVirtualRules\(\);/);
 });

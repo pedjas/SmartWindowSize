@@ -22,8 +22,9 @@ When that website is opened again, SmartWindowSize restores its saved size.
 Configuration
 -------------
 
-Configuration contains global settings, saved rules, diagnostics, and JSON
-backup and restore.
+Configuration contains global settings, saved rules, session Virtual Rules,
+diagnostics, and JSON backup and restore. Rules and Virtual Rules tab labels
+show their current list counts; disabled saved Rules are included.
 
 
 Rules Sync
@@ -55,8 +56,10 @@ Disable Extension enabled to stop SmartWindowSize from resizing, saving, or
 moving windows. The toolbar icon becomes gray while the extension is disabled.
 
 Automatically set window size if no rules is optional. When it is enabled,
-Width and Height are applied to a newly opened window for a website that has
-no saved rule. It does not create a rule.
+Width and Height seed a temporary session-only Virtual Rule for a domain that
+has neither an enabled saved Rule nor a Virtual Rule. Turning it off prevents
+new Virtual Rules only: existing Virtual Rules remain active and retain manual
+sizes until Clear All or browser-session end. They never become saved Rules.
 
 Click Save settings after changing the size. Manual input selects Custom.
 Toggling automatic sizing keeps the entered dimensions.

@@ -323,10 +323,14 @@ function createRuleDetail(label, value) {
   return detail;
 }
 
+/** Updates a tab label from the same authoritative collection rendered by its panel. @param {string} tabId Tab element ID. @param {string} label Base tab label. @param {Array<object>} items Rendered collection. @returns {void} Completion after the label reflects its collection length. */
+function renderTabCount(tabId, label, items) { document.querySelector(`#${tabId}`).textContent = `${label} (${items.length})`; }
+
 /** Reads and renders the authoritative session-only virtual domain registry. @returns {Promise<void>} Completion after current values render. */
 async function refreshVirtualRules() {
   const response = await request({ type: "get-virtual-rules" });
   const rules = response?.rules ?? [];
+  renderTabCount("virtual-rules-tab", "Virtual Rules", rules);
   document.querySelector("#virtual-rules-empty").hidden = rules.length !== 0;
   for (const button of document.querySelectorAll(".clear-virtual-rules")) button.disabled = rules.length === 0;
   const header = document.createElement("div"); header.className = "virtual-rules-row virtual-rules-header";
@@ -386,6 +390,7 @@ function createSyncDetails(rule, effectiveScope) {
 
 /** Renders all saved rules as readable cards and binds their deletion controls. @returns {void} */
 function renderRules() {
+  renderTabCount("rules-tab", "Rules", config.rules);
   document.querySelector("#rules-empty").hidden = config.rules.length !== 0;
   document.querySelector("#rules").replaceChildren(...config.rules.map((rule) => {
     const card = document.createElement("article");
@@ -493,7 +498,7 @@ document.querySelector("#clear-diagnostics").addEventListener("click", () => run
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === "diagnostics-changed") renderDiagnostics().catch((error) => { document.querySelector("#diagnostic-status").textContent = error.message; });
   if (message.type === "rule-editors-changed") refreshRuleAccess().catch((error) => showClientError("Refresh rule access", error));
-  if (message.type === "virtual-rules-changed" && !document.querySelector("#virtual-rules-panel").hidden) refreshVirtualRules().catch((error) => showClientError("Refresh virtual rules", error));
+  if (message.type === "virtual-rules-changed") refreshVirtualRules().catch((error) => showClientError("Refresh virtual rules", error));
 });
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes[KEY]) {
@@ -523,6 +528,7 @@ runClientAction("Load configuration", async () => {
   await refreshRuleAccess();
   renderGlobal();
   renderRules();
+  await refreshVirtualRules();
   await renderDiagnostics();
   await refreshCurrentDefaultWindowSize();
 });

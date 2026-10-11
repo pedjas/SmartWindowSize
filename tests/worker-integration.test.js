@@ -1410,6 +1410,53 @@ test("clearing virtual rules leaves saved configuration and sync untouched until
 });
 
 
+test("default sizing gates only virtual-rule creation, not existing virtual-rule use", async () => {
+  const browser = await browserFixture();
+  Object.assign(browser.local.smartWindowSizeConfig.global, { useDefaultSize: true, automaticWidth: 1200, automaticHeight: 900 });
+  const firstTab = browser.tabs.get(1); firstTab.url = "https://example.com/first";
+  await browser.apply(firstTab);
+  Object.assign(browser.windows.get(7), { width: 1450, height: 1000 });
+  browser.listeners.bounds(structuredClone(browser.windows.get(7))); await browser.settle(); await browser.runTimers();
+  Object.assign(browser.local.smartWindowSizeConfig.global, { useDefaultSize: false });
+
+  firstTab.url = "https://example.com/next";
+  await browser.apply(firstTab);
+  assert.deepEqual({ width: browser.windows.get(7).width, height: browser.windows.get(7).height }, { width: 1450, height: 1000 });
+  browser.windows.set(8, { id: 8, type: "normal", state: "normal", left: 20, top: 20, width: 700, height: 500 });
+  browser.tabs.set(3, { id: 3, windowId: 8, active: true, url: "https://example.com/other" });
+  await browser.apply(browser.tabs.get(3));
+  assert.deepEqual({ width: browser.windows.get(8).width, height: browser.windows.get(8).height }, { width: 1450, height: 1000 });
+
+  await browser.dispatch({ type: "clear-virtual-rules" });
+  await browser.apply(firstTab);
+  assert.equal(browser.ephemeral.virtualDefaultRules, undefined);
+  Object.assign(browser.local.smartWindowSizeConfig.global, { useDefaultSize: true, automaticWidth: 1300, automaticHeight: 850 });
+  await browser.apply(firstTab);
+  assert.deepEqual(browser.ephemeral.virtualDefaultRules, { "example.com": { width: 1300, height: 850 } });
+});
+
+
+test("enabled real rules beat existing virtual rules while disabled real rules remain non-exclusions", async () => {
+  const broader = rule("domain_tree", "example.com", 900);
+  const disabledSpecific = rule("exact_hostname", "app.example.com", 800); disabledSpecific.enabled = false;
+  const browser = await browserFixture([broader, disabledSpecific]);
+  browser.ephemeral.virtualDefaultRules = { "app.example.com": { width: 1450, height: 1000 } };
+  Object.assign(browser.local.smartWindowSizeConfig.global, { useDefaultSize: false });
+  const tab = browser.tabs.get(1); tab.url = "https://app.example.com/path";
+  await browser.apply(tab);
+  assert.equal(browser.windows.get(7).width, 900);
+
+  browser.local.smartWindowSizeConfig.rules.find((candidate) => candidate.id === broader.id).enabled = false;
+  await browser.apply(tab);
+  assert.deepEqual({ width: browser.windows.get(7).width, height: browser.windows.get(7).height }, { width: 1450, height: 1000 });
+  delete browser.ephemeral.virtualDefaultRules;
+  const updatesBefore = browser.updates.length;
+  await browser.apply(tab);
+  assert.equal(browser.updates.length, updatesBefore);
+  assert.equal(browser.ephemeral.virtualDefaultRules, undefined);
+});
+
+
 test("default-disabled no-rule tabs remain unchanged and explicit rules still reapply on completion", async () => {
   const noRule = await browserFixture();
   const noRuleTab = noRule.tabs.get(1);

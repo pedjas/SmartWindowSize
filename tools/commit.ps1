@@ -22,6 +22,15 @@ function Get-CommitRepositoryState {
     return [pscustomobject]@{ Name=$Name; Path=$Path; Branch=$branch; Status=$status; Changed=(-not [string]::IsNullOrWhiteSpace($status)) }
 }
 
+function Get-CommitResult {
+    param([string]$Path, [string]$Name)
+    return [pscustomobject]@{
+        Name = $Name
+        Hash = Invoke-SharedRepositoryGitCommand -GitPath $git -RepositoryPath $Path -Arguments @('rev-parse','--short','HEAD') -Description "Reading $Name commit hash"
+        Subject = Invoke-SharedRepositoryGitCommand -GitPath $git -RepositoryPath $Path -Arguments @('log','-1','--format=%s') -Description "Reading $Name commit subject"
+    }
+}
+
 function Get-CommitRepositoryPaths {
     param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Name)
 
@@ -56,17 +65,21 @@ Write-Host "Source: $(if($source.Changed){'would commit'}else{'clean; skipped'})
 Write-Host "Documentation: $(if($docs.Changed){'would commit'}else{'clean; skipped'})"
 if ($WhatIfPreference) { Write-Host "Source message: $SourceMessage"; Write-Host "Documentation message: $DocsMessage"; return }
 
-$completed = [Collections.Generic.List[string]]::new()
+$completed = [Collections.Generic.List[object]]::new()
 try {
     if ($source.Changed -and $PSCmdlet.ShouldProcess('Source milestone','Create local commit')) {
         & (Join-Path $PSScriptRoot 'commit-milestone.ps1') -Message $SourceMessage -Path @($sourcePaths | Where-Object { $_ -ne 'CHANGELOG.md' })
-        if ($LASTEXITCODE -ne 0) { throw 'Source milestone commit failed.' }; $completed.Add('Source')
+        if ($LASTEXITCODE -ne 0) { throw 'Source milestone commit failed.' }; $completed.Add((Get-CommitResult -Path $ProjectRoot -Name 'Source'))
     }
     if ($docs.Changed -and $PSCmdlet.ShouldProcess('Documentation','Create local commit')) {
         Invoke-SharedRepositoryGitCommand -GitPath $git -RepositoryPath $DocumentationRoot -Arguments (@('add','--') + $docsPaths) -Description 'Staging documentation changes' | Out-Null
         Invoke-SharedRepositoryGitCommand -GitPath $git -RepositoryPath $DocumentationRoot -Arguments @('commit','-m',$DocsMessage) -Description 'Creating documentation commit' | Out-Null
-        $completed.Add('Documentation')
+        $completed.Add((Get-CommitResult -Path $DocumentationRoot -Name 'Documentation'))
     }
 }
-catch { throw "Coordinated commit stopped after: $($completed -join ', '). $($_.Exception.Message)" }
-Write-Host "Committed: $($completed -join ', '). Nothing pushed."
+catch {
+    foreach ($result in $completed) { Write-Host "$($result.Name)`n  commit: $($result.Hash)`n  subject: $($result.Subject)" }
+    throw "Coordinated commit stopped after: $($completed.Name -join ', '). No rollback was performed. $($_.Exception.Message)"
+}
+foreach ($result in $completed) { Write-Host "$($result.Name)`n  commit: $($result.Hash)`n  subject: $($result.Subject)" }
+Write-Host "Result`n  Source: $(if($source.Changed){'committed'}else{'no changes'})`n  Documentation: $(if($docs.Changed){'committed'}else{'no changes'})`n  Nothing pushed."

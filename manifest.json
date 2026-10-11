@@ -1,13 +1,13 @@
 {
   "manifest_version": 3,
   "name": "SmartWindowSize",
-  "version": "1.2.22",
+  "version": "1.2.24",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvmEBnG7zxLUsM/Tt1WY3r34RZEc7rABRBwydWIGOXRO4cfP69wUmG1Ik11nging7qRHOLSXnt0RmA4HxjqwHdOM8sElYl6mXnvGr5LdH83/XD6/nzxui4CKJBTX6SsDZFn85fye0YTZ+h4NH6u0nQ1WUIrHvxFqtyS+/B4YTTV7/nD86KsWT0pcu+ESiJehTSIfF+GZJIzR0qnikAOb3oLdpm4jrJWMB8Xj/gEd0f03j6T70N2RuI5xchsQ0+VZhLwpeSlCG9w1prFoZoR48Nw8uGrpUePTdi+8olEQq1EsU6k0mNlLYk4GwQ6lnOxSFaqkHU+yQzhNkrSCSpV3vCQIDAQAB",
   "description": "Restores browser window sizes by domain, subdomain, path, or page.",
   "permissions": ["storage", "tabs", "windows", "contextMenus", "system.display"],
   "background": { "service_worker": "background/service-worker.js", "type": "module" },
   "action": {
-    "default_title": "SmartWindowSize 1.2.22: enabled",
+    "default_title": "SmartWindowSize 1.2.24: enabled",
     "default_popup": "popup/popup.html",
     "default_icon": {
       "16": "icons/active-16.png",

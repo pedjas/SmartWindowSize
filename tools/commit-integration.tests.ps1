@@ -63,12 +63,13 @@ function Add-DocumentationChanges {
 }
 
 function Invoke-CommitWorkflow {
-    param([pscustomobject]$Fixture, [switch]$WhatIf)
+    param([pscustomobject]$Fixture, [switch]$WhatIf, [switch]$AllowFailure)
     $arguments = @('-NoProfile', '-File', (Join-Path $Fixture.Source 'tools/commit.ps1'))
     if ($WhatIf) { $arguments += '-WhatIf' }
-    $output = @(& $pwsh @arguments)
-    if ($LASTEXITCODE -ne 0) { throw "Coordinated commit failed: $($output -join [Environment]::NewLine)" }
-    return $output -join [Environment]::NewLine
+    $output = @(& $pwsh @arguments 2>&1 | ForEach-Object ToString)
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0 -and -not $AllowFailure) { throw "Coordinated commit failed: $($output -join [Environment]::NewLine)" }
+    return [pscustomobject]@{ ExitCode = $exitCode; Output = $output -join [Environment]::NewLine }
 }
 
 function Assert-CleanRepository {
@@ -82,12 +83,12 @@ try {
 
     $docsOnly = New-CommitFixture -Name 'docs-only'
     Add-DocumentationChanges -Fixture $docsOnly
-    $sourceBefore = (Invoke-TestGit -Repository $docsOnly.Source -ArgumentList @('rev-parse', 'HEAD'))[0]
-    $docsBefore = (Invoke-TestGit -Repository $docsOnly.Docs -ArgumentList @('rev-parse', 'HEAD'))[0]
-    $output = Invoke-CommitWorkflow -Fixture $docsOnly
-    if ($output -notmatch 'Source: clean; skipped' -or $output -notmatch 'Documentation: would commit') { throw 'Docs-only plan did not report source skip and documentation commit.' }
-    if ((Invoke-TestGit -Repository $docsOnly.Source -ArgumentList @('rev-parse', 'HEAD'))[0] -ne $sourceBefore) { throw 'Docs-only commit must not create a source commit.' }
-    if ((Invoke-TestGit -Repository $docsOnly.Docs -ArgumentList @('rev-parse', 'HEAD'))[0] -eq $docsBefore) { throw 'Docs-only commit must create a documentation commit.' }
+    $sourceBefore = @(Invoke-TestGit -Repository $docsOnly.Source -ArgumentList @('rev-parse', 'HEAD'))[0]
+    $docsBefore = @(Invoke-TestGit -Repository $docsOnly.Docs -ArgumentList @('rev-parse', 'HEAD'))[0]
+    $result = Invoke-CommitWorkflow -Fixture $docsOnly
+    if ($result.Output -notmatch 'Source: clean; skipped' -or $result.Output -notmatch 'Documentation: would commit') { throw 'Docs-only plan did not report source skip and documentation commit.' }
+    if (@(Invoke-TestGit -Repository $docsOnly.Source -ArgumentList @('rev-parse', 'HEAD'))[0] -ne $sourceBefore) { throw 'Docs-only commit must not create a source commit.' }
+    if (@(Invoke-TestGit -Repository $docsOnly.Docs -ArgumentList @('rev-parse', 'HEAD'))[0] -eq $docsBefore) { throw 'Docs-only commit must create a documentation commit.' }
     $committedDocs = @(Invoke-TestGit -Repository $docsOnly.Docs -ArgumentList @('show', '--format=', '--name-only', 'HEAD'))
     foreach ($path in @('MANUAL-TESTS.md', 'nested/SMOKE-TESTS.md', 'file with spaces.md', 'SMART-WINDOW-SIZE-HANDOFF-2026-10-10.md')) { if ($committedDocs -notcontains $path) { throw "Documentation commit omitted '$path'." } }
     if ($committedDocs.Count -ne 4) { throw 'Documentation commit staged an unexpected path.' }
@@ -96,24 +97,54 @@ try {
     $both = New-CommitFixture -Name 'both'
     Add-DocumentationChanges -Fixture $both
     Write-TestFile -Path (Join-Path $both.Source 'core/tooling-change.js') -Content 'export const toolingChange = true;'
-    $sourceBefore = (Invoke-TestGit -Repository $both.Source -ArgumentList @('rev-parse', 'HEAD'))[0]
-    $docsBefore = (Invoke-TestGit -Repository $both.Docs -ArgumentList @('rev-parse', 'HEAD'))[0]
-    Invoke-CommitWorkflow -Fixture $both | Out-Null
-    if ((Invoke-TestGit -Repository $both.Source -ArgumentList @('rev-parse', 'HEAD'))[0] -eq $sourceBefore -or (Invoke-TestGit -Repository $both.Docs -ArgumentList @('rev-parse', 'HEAD'))[0] -eq $docsBefore) { throw 'Both-dirty commit must create separate source and documentation commits.' }
+    $sourceBefore = @(Invoke-TestGit -Repository $both.Source -ArgumentList @('rev-parse', 'HEAD'))[0]
+    $docsBefore = @(Invoke-TestGit -Repository $both.Docs -ArgumentList @('rev-parse', 'HEAD'))[0]
+    $result = Invoke-CommitWorkflow -Fixture $both
+    $sourceAfter = @(Invoke-TestGit -Repository $both.Source -ArgumentList @('rev-parse', 'HEAD'))[0]
+    $docsAfter = @(Invoke-TestGit -Repository $both.Docs -ArgumentList @('rev-parse', 'HEAD'))[0]
+    if ($sourceAfter -eq $sourceBefore -or $docsAfter -eq $docsBefore) { throw 'Both-dirty commit must create separate source and documentation commits.' }
+    $sourceSubject = @(Invoke-TestGit -Repository $both.Source -ArgumentList @('log', '-1', '--format=%s'))[0]
+    $docsSubject = @(Invoke-TestGit -Repository $both.Docs -ArgumentList @('log', '-1', '--format=%s'))[0]
+    $sourceShortHash = @(Invoke-TestGit -Repository $both.Source -ArgumentList @('rev-parse', '--short', 'HEAD'))[0]
+    $docsShortHash = @(Invoke-TestGit -Repository $both.Docs -ArgumentList @('rev-parse', '--short', 'HEAD'))[0]
+    $sourceReport = "(?s)Source\s+commit:\s+$([regex]::Escape($sourceShortHash))\s+subject:\s+$([regex]::Escape($sourceSubject))"
+    $docsReport = "(?s)Documentation\s+commit:\s+$([regex]::Escape($docsShortHash))\s+subject:\s+$([regex]::Escape($docsSubject))"
+    if ($result.Output -notmatch $sourceReport -or $result.Output -notmatch $docsReport -or $result.Output -notmatch '(?s)Result\s+Source:\s+committed\s+Documentation:\s+committed\s+Nothing pushed\.') {
+        throw 'Both-dirty result omitted the completed commit reporting summary.'
+    }
     Assert-CleanRepository -Repository $both.Source; Assert-CleanRepository -Repository $both.Docs
 
     $dryRun = New-CommitFixture -Name 'dry-run'
     Add-DocumentationChanges -Fixture $dryRun
     $docsBefore = @(Invoke-TestGit -Repository $dryRun.Docs -ArgumentList @('rev-parse', 'HEAD'))[0]
-    $output = Invoke-CommitWorkflow -Fixture $dryRun -WhatIf
-    if ($output -notmatch 'Documentation: would commit') { throw 'Dry run must use the parsed documentation path plan.' }
+    $result = Invoke-CommitWorkflow -Fixture $dryRun -WhatIf
+    if ($result.Output -notmatch 'Documentation: would commit' -or $result.Output -match 'commit:\s+[0-9a-f]+') { throw 'Dry run must plan without reporting a created commit.' }
     if (@(Invoke-TestGit -Repository $dryRun.Docs -ArgumentList @('rev-parse', 'HEAD'))[0] -ne $docsBefore) { throw 'Dry run must not create a documentation commit.' }
 
     $clean = New-CommitFixture -Name 'clean'
-    $sourceBefore = (Invoke-TestGit -Repository $clean.Source -ArgumentList @('rev-parse', 'HEAD'))[0]
-    $docsBefore = (Invoke-TestGit -Repository $clean.Docs -ArgumentList @('rev-parse', 'HEAD'))[0]
+    $sourceBefore = @(Invoke-TestGit -Repository $clean.Source -ArgumentList @('rev-parse', 'HEAD'))[0]
+    $docsBefore = @(Invoke-TestGit -Repository $clean.Docs -ArgumentList @('rev-parse', 'HEAD'))[0]
     Invoke-CommitWorkflow -Fixture $clean | Out-Null
-    if ((Invoke-TestGit -Repository $clean.Source -ArgumentList @('rev-parse', 'HEAD'))[0] -ne $sourceBefore -or (Invoke-TestGit -Repository $clean.Docs -ArgumentList @('rev-parse', 'HEAD'))[0] -ne $docsBefore) { throw 'A clean coordinated commit must not create an empty commit.' }
+    if (@(Invoke-TestGit -Repository $clean.Source -ArgumentList @('rev-parse', 'HEAD'))[0] -ne $sourceBefore -or @(Invoke-TestGit -Repository $clean.Docs -ArgumentList @('rev-parse', 'HEAD'))[0] -ne $docsBefore) { throw 'A clean coordinated commit must not create an empty commit.' }
+
+    $partial = New-CommitFixture -Name 'partial'
+    Add-DocumentationChanges -Fixture $partial
+    Write-TestFile -Path (Join-Path $partial.Source 'core/tooling-change.js') -Content 'export const toolingChange = true;'
+    $sourceBefore = @(Invoke-TestGit -Repository $partial.Source -ArgumentList @('rev-parse', 'HEAD'))[0]
+    $docsBefore = @(Invoke-TestGit -Repository $partial.Docs -ArgumentList @('rev-parse', 'HEAD'))[0]
+    Write-TestFile -Path (Join-Path $partial.Docs 'hooks/pre-commit') -Content "#!/bin/sh`nexit 1"
+    Invoke-TestGit -Repository $partial.Docs -ArgumentList @('config', 'core.hooksPath', 'hooks') | Out-Null
+    $result = Invoke-CommitWorkflow -Fixture $partial -AllowFailure
+    $sourceAfter = @(Invoke-TestGit -Repository $partial.Source -ArgumentList @('rev-parse', 'HEAD'))[0]
+    $docsAfter = @(Invoke-TestGit -Repository $partial.Docs -ArgumentList @('rev-parse', 'HEAD'))[0]
+    if ($result.ExitCode -eq 0 -or $sourceAfter -eq $sourceBefore -or $docsAfter -ne $docsBefore) { throw 'Partial failure fixture must retain only the completed source commit.' }
+    $sourceShortHash = @(Invoke-TestGit -Repository $partial.Source -ArgumentList @('rev-parse', '--short', 'HEAD'))[0]
+    $sourceSubject = @(Invoke-TestGit -Repository $partial.Source -ArgumentList @('log', '-1', '--format=%s'))[0]
+    $sourceReport = "(?s)Source\s+commit:\s+$([regex]::Escape($sourceShortHash))\s+subject:\s+$([regex]::Escape($sourceSubject))"
+    if ($result.Output -notmatch $sourceReport -or $result.Output -notmatch 'Coordinated commit stopped after: Source' -or $result.Output -notmatch 'No rollback was performed\.') {
+        throw 'Partial-failure result omitted the completed source commit or no-rollback reporting.'
+    }
+    Assert-CleanRepository -Repository $partial.Source
     Write-Host 'Coordinated commit disposable-repository integration tests passed.'
 }
 finally {
