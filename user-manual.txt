@@ -246,4 +246,3 @@ software. You may use the official software free of charge for personal and
 non-commercial purposes. Redistribution, rebranding, publication of modified
 versions as separate products, and commercial use require prior written
 permission. See LICENSE for the complete license terms.
-
