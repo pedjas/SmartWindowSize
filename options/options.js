@@ -489,7 +489,7 @@ for (const button of document.querySelectorAll("#clear-virtual-rules, #clear-vir
   button.classList.add("clear-virtual-rules");
   button.addEventListener("click", () => { if (confirm("Clear all virtual rules for this browser session?")) runButtonFeedback(button, { working: "Clearing…", success: "Cleared ✓" }, async () => { await request({ type: "clear-virtual-rules" }); await refreshVirtualRules(); }); });
 }
-document.querySelector("#open-readme").addEventListener("click", () => runClientAction("Open local README", () => request({ type: "open-local-readme" })));
+document.querySelector("#open-readme").addEventListener("click", () => runClientAction("Open user manual", () => request({ type: "open-local-readme" })));
 document.querySelector("#copy-diagnostics").addEventListener("click", () => runClientAction("Copy diagnostics", copyDiagnostics));
 document.querySelector("#clear-diagnostics").addEventListener("click", () => runClientAction("Clear diagnostics", async () => {
   await request({ type: "clear-diagnostics" });

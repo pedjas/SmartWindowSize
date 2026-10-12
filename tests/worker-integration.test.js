@@ -937,7 +937,7 @@ test("Set and Edit requests share one reserved editor key for the same source ta
 });
 
 
-test("About and Configuration can focus one packaged local README tab", async () => {
+test("About and Configuration can focus one packaged user manual tab", async () => {
   const browser = await browserFixture();
   await browser.dispatch({ type: "open-local-readme" });
   await browser.dispatch({ type: "open-local-readme" });

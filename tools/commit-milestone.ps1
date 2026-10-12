@@ -66,7 +66,9 @@ function Get-RelativeProjectPath {
     if (-not $fullPath.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "Commit path resolves outside the project: $Candidate"
     }
-    if (-not (Test-Path -LiteralPath $fullPath)) { throw "Commit path does not exist: $Candidate" }
+    if (-not (Test-Path -LiteralPath $fullPath) -and -not (Test-SharedRepositoryGitTrackedPath -GitPath $GitPath -RepositoryPath $ProjectRoot -RelativePath $Candidate)) {
+        throw "Commit path does not exist and is not tracked for deletion: $Candidate"
+    }
     return $Candidate
 }
 

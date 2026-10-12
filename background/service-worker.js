@@ -1,5 +1,5 @@
 /**
- * SmartWindowSize | Version: 1.2.24 | Last updated: 2026-10-11 18:00:00 +02:00
+ * SmartWindowSize | Version: 1.2.27 | Last updated: 2026-10-12 00:00:00 +02:00
  *
  * Coordinates serialized window operations, validated configuration writes,
  * unique dialogs, and session diagnostics.
@@ -990,7 +990,7 @@ async function discoverRuleEditorTab(window, token) {
 }
 
 
-/** Opens or focuses the single internal tab that displays the packaged local README. @returns {Promise<void>} Completes after the tab is created or focused. */
+/** Opens or focuses the single internal tab that displays the packaged user manual. @returns {Promise<void>} Completes after the tab is created or focused. */
 async function openLocalReadme() {
   const url = chrome.runtime.getURL("readme-viewer/readme.html");
   const existing = (await chrome.tabs.query({})).find((tab) => tab.url === url || tab.pendingUrl === url);

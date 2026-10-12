@@ -54,6 +54,14 @@ function New-CommitFixture {
     return [pscustomobject]@{ Source = $source; Docs = $docs }
 }
 
+function Add-SourceDeletion {
+    param([pscustomobject]$Fixture)
+    Write-TestFile -Path (Join-Path $Fixture.Source 'retired.txt') -Content 'retired source file'
+    Invoke-TestGit -Repository $Fixture.Source -ArgumentList @('add', '--', 'retired.txt') | Out-Null
+    Invoke-TestGit -Repository $Fixture.Source -ArgumentList @('commit', '-qm', 'track retired source file') | Out-Null
+    Remove-Item -LiteralPath (Join-Path $Fixture.Source 'retired.txt')
+}
+
 function Add-DocumentationChanges {
     param([pscustomobject]$Fixture)
     Write-TestFile -Path (Join-Path $Fixture.Docs 'MANUAL-TESTS.md') -Content 'changed manual'
@@ -96,6 +104,7 @@ try {
 
     $both = New-CommitFixture -Name 'both'
     Add-DocumentationChanges -Fixture $both
+    Add-SourceDeletion -Fixture $both
     Write-TestFile -Path (Join-Path $both.Source 'core/tooling-change.js') -Content 'export const toolingChange = true;'
     $sourceBefore = @(Invoke-TestGit -Repository $both.Source -ArgumentList @('rev-parse', 'HEAD'))[0]
     $docsBefore = @(Invoke-TestGit -Repository $both.Docs -ArgumentList @('rev-parse', 'HEAD'))[0]
@@ -113,6 +122,15 @@ try {
         throw 'Both-dirty result omitted the completed commit reporting summary.'
     }
     Assert-CleanRepository -Repository $both.Source; Assert-CleanRepository -Repository $both.Docs
+
+    $zeroSuccessFailure = New-CommitFixture -Name 'zero-success-failure'
+    Add-SourceDeletion -Fixture $zeroSuccessFailure
+    Write-TestFile -Path (Join-Path $zeroSuccessFailure.Source 'hooks/pre-commit') -Content "#!/bin/sh`nexit 1"
+    Invoke-TestGit -Repository $zeroSuccessFailure.Source -ArgumentList @('config', 'core.hooksPath', 'hooks') | Out-Null
+    $result = Invoke-CommitWorkflow -Fixture $zeroSuccessFailure -AllowFailure
+    if ($result.ExitCode -eq 0 -or $result.Output -notmatch 'Coordinated commit stopped after: none\. No rollback was performed\.' -or $result.Output -match "property 'Name' cannot be found") {
+        throw 'A zero-success source failure must report no completed commits without a StrictMode property error.'
+    }
 
     $dryRun = New-CommitFixture -Name 'dry-run'
     Add-DocumentationChanges -Fixture $dryRun

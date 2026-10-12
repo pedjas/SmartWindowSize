@@ -67,7 +67,7 @@ $ControlledUnpackedDirectories = @(
 )
 
 <# The versioned installation instructions copied into every release artifact. #>
-$InstallReadmeSource = Join-Path $ProjectRoot 'readme.txt'
+$InstallManualSource = Join-Path $ProjectRoot 'user-manual.txt'
 
 
 <#
@@ -136,11 +136,11 @@ function New-ReleaseDirectory {
     New-Item -ItemType Directory -Path $Destination | Out-Null
 
     # The packaged user guide is required in both browser-specific artifacts.
-    if (-not (Test-Path -LiteralPath $InstallReadmeSource -PathType Leaf)) {
-        throw "Required installation readme is missing: $InstallReadmeSource"
+    if (-not (Test-Path -LiteralPath $InstallManualSource -PathType Leaf)) {
+        throw "Required user manual is missing: $InstallManualSource"
     }
 
-    Copy-Item -LiteralPath $InstallReadmeSource -Destination (Join-Path $Destination 'readme.txt')
+    Copy-Item -LiteralPath $InstallManualSource -Destination (Join-Path $Destination 'user-manual.txt')
 
     # Copy only the runtime allowlist so tests and private project material cannot leak into packages.
     foreach ($directory in $RuntimeDirectories) {
@@ -214,8 +214,8 @@ function Test-ReleaseArchive {
             throw 'The ZIP does not contain manifest.json at its root.'
         }
 
-        if ($entryNames -notcontains 'readme.txt') {
-            throw 'The ZIP does not contain readme.txt at its root.'
+        if ($entryNames -notcontains 'user-manual.txt') {
+            throw 'The ZIP does not contain user-manual.txt at its root.'
         }
 
         if ($entryNames | Where-Object { $_ -match '(^|/)install/' }) {
@@ -244,7 +244,7 @@ The prepared unpacked extension directory.
 The controlled ZIP path to replace after a verified temporary archive exists.
 
 .OUTPUTS
-None. Creates and validates a ZIP whose root contains manifest.json and readme.txt.
+None. Creates and validates a ZIP whose root contains manifest.json and user-manual.txt.
 #>
 function New-ReleaseArchive {
     param(

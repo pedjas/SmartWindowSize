@@ -31,6 +31,12 @@ function Get-CommitResult {
     }
 }
 
+function Get-CompletedCommitNames {
+    param([Parameter(Mandatory)][System.Collections.IEnumerable]$Results)
+
+    return @($Results | ForEach-Object { $_.Name })
+}
+
 function Get-CommitRepositoryPaths {
     param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Name)
 
@@ -79,7 +85,9 @@ try {
 }
 catch {
     foreach ($result in $completed) { Write-Host "$($result.Name)`n  commit: $($result.Hash)`n  subject: $($result.Subject)" }
-    throw "Coordinated commit stopped after: $($completed.Name -join ', '). No rollback was performed. $($_.Exception.Message)"
+    $completedNames = @(Get-CompletedCommitNames -Results $completed)
+    $completedDescription = if ($completedNames.Count -gt 0) { $completedNames -join ', ' } else { 'none' }
+    throw "Coordinated commit stopped after: $completedDescription. No rollback was performed. $($_.Exception.Message)"
 }
 foreach ($result in $completed) { Write-Host "$($result.Name)`n  commit: $($result.Hash)`n  subject: $($result.Subject)" }
 Write-Host "Result`n  Source: $(if($source.Changed){'committed'}else{'no changes'})`n  Documentation: $(if($docs.Changed){'committed'}else{'no changes'})`n  Nothing pushed."

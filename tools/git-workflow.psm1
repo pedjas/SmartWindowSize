@@ -1,6 +1,14 @@
 <# Shared native Git execution for SmartWindowSize repository workflows. #>
 Set-StrictMode -Version Latest
 
+function Get-SharedRepositoryGitArguments {
+    param([Parameter(Mandatory)][string]$RepositoryPath)
+
+    $repository = [System.IO.Path]::GetFullPath($RepositoryPath)
+    $safeDirectory = $repository -replace '\\', '/'
+    return @('-c', "safe.directory=$safeDirectory", '-C', $repository)
+}
+
 function Get-SharedNativeCommandResult {
     param([Parameter(Mandatory)][string]$Executable, [Parameter(Mandatory)][string[]]$Arguments)
 
@@ -39,9 +47,14 @@ function Invoke-SharedNativeCommand {
 function Invoke-SharedRepositoryGitCommand {
     param([Parameter(Mandatory)][string]$GitPath, [Parameter(Mandatory)][string]$RepositoryPath, [Parameter(Mandatory)][string[]]$Arguments, [Parameter(Mandatory)][string]$Description)
 
-    $repository = [System.IO.Path]::GetFullPath($RepositoryPath)
-    $safeDirectory = $repository -replace '\\', '/'
-    return Invoke-SharedNativeCommand -Executable $GitPath -Arguments (@('-c', "safe.directory=$safeDirectory", '-C', $repository) + $Arguments) -Description $Description
+    return Invoke-SharedNativeCommand -Executable $GitPath -Arguments ((Get-SharedRepositoryGitArguments -RepositoryPath $RepositoryPath) + $Arguments) -Description $Description
+}
+
+function Test-SharedRepositoryGitTrackedPath {
+    param([Parameter(Mandatory)][string]$GitPath, [Parameter(Mandatory)][string]$RepositoryPath, [Parameter(Mandatory)][string]$RelativePath)
+
+    $result = Get-SharedNativeCommandResult -Executable $GitPath -Arguments ((Get-SharedRepositoryGitArguments -RepositoryPath $RepositoryPath) + @('ls-files', '--error-unmatch', '--', $RelativePath))
+    return $result.ExitCode -eq 0
 }
 
 function ConvertFrom-SharedGitPathOutput {
@@ -49,4 +62,4 @@ function ConvertFrom-SharedGitPathOutput {
     return @($Output -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 }
 
-Export-ModuleMember -Function Get-SharedNativeCommandResult, Invoke-SharedNativeCommand, Invoke-SharedRepositoryGitCommand, ConvertFrom-SharedGitPathOutput
+Export-ModuleMember -Function Get-SharedNativeCommandResult, Invoke-SharedNativeCommand, Invoke-SharedRepositoryGitCommand, Test-SharedRepositoryGitTrackedPath, ConvertFrom-SharedGitPathOutput

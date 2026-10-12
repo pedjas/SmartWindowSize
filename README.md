@@ -10,8 +10,11 @@ window, not the web page viewport. The active tab determines which rule applies.
 Loading an inactive tab does not resize the shared window. Each window follows
 its own active tab, even when that window is not focused.
 
-This guide describes the agreed application behavior. Browser compatibility
-and fixes must still be verified using the project's smoke tests.
+This README is the developer and project guide: it describes agreed application
+behavior and development context. Browser compatibility and fixes must still be
+verified using the project's smoke tests. The bundled end-user guide is
+`user-manual.txt`, which is intentionally plain text and focused on using the
+installed extension.
 
 ## Default behavior
 
@@ -217,9 +220,9 @@ window size if no rules**. Then select a **Window size preset** and optional
 **Vertical** orientation, or enter a custom **Width** and **Height**. These
 four dependent controls are unavailable while automatic sizing is off.
 
-Both **Configuration** and **About SmartWindowSize** provide **Open local
-README**. It opens one internal browser tab that displays the versioned
-`readme.txt` shipped with the extension.
+Both **Configuration** and **About SmartWindowSize** provide **Open user
+manual**. It opens one internal browser tab that displays the versioned
+`user-manual.txt` shipped with the extension.
 
 Rule retention offers 90, 180, 365, 730 days, or **Never**. The Diagnostics
 detail selector immediately follows it and offers Errors only, Warnings and

@@ -18,7 +18,7 @@ for (const button of document.querySelectorAll("button")) button.title ||= butto
 document.querySelector("#ok").addEventListener("click", () => window.close());
 document.querySelector("#open-readme").addEventListener("click", async (event) => {
   event.preventDefault();
-  await runClientAction("Open local README", () => request({ type: "open-local-readme" }));
+  await runClientAction("Open user manual", () => request({ type: "open-local-readme" }));
 });
 document.querySelector("#bring-to-front").disabled = !Number.isInteger(tabId);
 document.querySelector("#bring-to-front").addEventListener("click", async () => {

@@ -1,0 +1,249 @@
+SmartWindowSize user manual
+============================
+
+SmartWindowSize keeps desktop browser windows visible and can choose a useful
+window size for the website you are using. Use Default dimensions for simple
+new-site sizing, or save separate Rules for sites that need their own size,
+position, or monitor. You can always resize a window yourself.
+
+
+Getting started
+---------------
+
+After installation, SmartWindowSize is enabled, but Automatically set window
+size if no rules is off. A site without a saved Rule therefore keeps its
+current size. The extension may return an off-screen window to the visible
+desktop and makes it smaller only when necessary to fit.
+
+SmartWindowSize does not create saved Rules automatically. It also does not
+automatically resize maximized or full-screen windows. Open the toolbar popup
+when you want to create a Rule or set a size yourself.
+
+
+Default dimensions and Virtual Rules
+------------------------------------
+
+Default dimensions are the Width and Height selected under Automatically set
+window size if no rules in Configuration. Turn this option on when new sites
+without a saved Rule should begin at a chosen size. Select a Window size preset,
+use Vertical to rotate a preset, enter Custom dimensions, or choose Use current
+window size and then Save settings.
+
+When Default dimensions are on and no enabled saved Rule applies, a new Virtual
+Rule can be created for that domain. A Virtual Rule is a temporary memory of a
+site's size. If you resize that window by hand, its remembered size can be used
+again after a reload, while navigating within the same applicable domain, or in
+another browser window during the same browser session.
+
+Virtual Rules are temporary. They normally disappear when the browser session
+ends, and an extension reload or update can also clear them. They are not saved
+Rules and are not synchronized between computers.
+
+Turning Default dimensions off does not turn off Virtual Rules that already
+exist. Existing ones continue until cleared or until the session ends. Turning
+the option off only prevents new Virtual Rules. Clear All removes the current
+Virtual Rules; while Default dimensions are off, missing Virtual Rules are not
+created again. Turn it on again to allow new sites to use the current default.
+
+
+Rules for individual sites
+--------------------------
+
+A Rule is a saved, persistent setting for a site or part of a site. Create one
+when a website should consistently use its own size, position, or monitor. Open
+the toolbar popup for that site and choose Set rules for this site. You can also
+use the SmartWindowSize toolbar right-click menu.
+
+Choose Add rule, select Rule coverage, choose the options you need, and then
+choose Save changes. The Rule starts with the current browser-window size.
+Coverage choices are:
+
+  This domain and its subdomains - the base domain and all subdomains.
+  Domain with and without www - the base domain and its www form only.
+  Exact hostname - one hostname only.
+  This URL and its subpaths - that address and pages below it.
+  This URL — any parameters - the address regardless of query parameters.
+  This URL — exact query parameters - only the same query parameters.
+  This URL — non-exact query parameters - chosen parameters, including extra
+  parameters where applicable.
+
+The Effective scope preview shows the relevant part of the current address.
+When more than one enabled Rule applies, the more specific Rule is used.
+
+Select Remember position for this rule to restore its screen position, and
+Remember monitor for this rule to prefer the monitor where it was saved when
+available. A disabled Rule behaves as though it is not present. It is not a
+site exclusion: another enabled Rule, an existing Virtual Rule, or normal
+no-rule behavior may still apply.
+
+Use a saved Rule for persistent site settings. Use a Virtual Rule for temporary
+session-only behavior created through Default dimensions.
+
+
+Manually setting the window size
+--------------------------------
+
+Open the toolbar popup and choose Manually set window size. Select a Size
+preset or Custom, enter Width and Height when needed, then choose Apply to
+current window. Presets include Default, SVGA, XGA, HD, WXGA, Full HD, QHD,
+and 4K UHD sizes; Vertical rotates a preset. Use current window size reads the
+current window and selects the matching preset or Custom values.
+
+Apply to current window resizes the current browser window. It does not create
+or edit a saved Rule and does not synchronize anything. If you physically resize
+a window while a Virtual Rule is active, that Virtual Rule can remember the new
+size for the rest of the browser session. Manual resizing alone never creates a
+new saved Rule.
+
+Use Bring window on screen from the toolbar right-click menu if a window is
+partly or fully outside the visible desktop.
+
+
+Synchronizing Rules between computers
+-------------------------------------
+
+Rules Sync is optional. Enable Sync rules between browsers in Configuration
+when you use the same browser synchronization profile or account on more than
+one computer and want saved Rules available there.
+
+Rules Sync uses the browser's built-in synchronization service. SmartWindowSize
+does not operate a separate server or require its own account. Saved site
+coverage and Rule remembering choices can be shared. Enabled or disabled state,
+current window size and placement, and monitor choice remain local to each
+computer. Virtual Rules are never synchronized.
+
+Use Sync now in the Rules tab after enabling Rules Sync. Each saved Rule also
+has Refresh from cloud, which refreshes shared Rule behavior while retaining
+this computer's size and placement. The toolbar right-click menu can offer Set
+current size as synced default for an applicable saved Rule; this updates the
+starting size used when another computer first receives that Rule.
+
+If SmartWindowSize cannot safely resolve a synchronization difference, it may
+show a warning or conflict in Diagnostics. Review the Rules and use refresh or
+edit actions before deciding what to keep.
+
+
+Configuration
+-------------
+
+Open Configuration from the browser's extension controls or the SmartWindowSize
+toolbar menu. It has Configuration, Rules, Virtual Rules, and Diagnostics tabs.
+
+Configuration tab
+
+Extension enabled turns automatic resizing and saving on or off. When it is
+off, SmartWindowSize does not resize, save, or move browser windows.
+
+Sync rules between browsers enables the optional Rules Sync service.
+
+Automatically set window size if no rules controls Default dimensions. Its
+Window size preset, Vertical, Width, Height, and Use current window size
+controls are available only while the option is on. Use current window size
+changes unsaved default dimensions but does not resize the window or save them.
+
+Delete rules older than controls cleanup of saved Rules. Choose Never to keep
+them until you delete them, or choose 90, 180, 365, or 730 days. Diagnostics
+detail offers Errors only, Warnings and errors, or Verbose.
+
+Save settings saves changed global settings. It is unavailable when there are
+no unsaved changes and becomes available again when a saved setting changes.
+Backup can Export JSON, Import JSON, or Reset all configuration after
+confirmation. Export a backup before deliberately resetting or removing the
+extension. Open user manual opens this guide.
+
+Rules tab
+
+Rules lists saved Rules. Rules (N) is the number of saved Rules, including
+disabled ones. Each entry shows coverage, size, state, remembering choices, and
+actions. Use Disable or Enable, Delete, and, when Rules Sync is enabled,
+Refresh from cloud. To add or edit Rule coverage, use Set rules for this site
+while viewing the relevant website.
+
+Virtual Rules tab
+
+Virtual Rules lists the temporary entries for this browser session. Virtual
+Rules (N) is their current count. The Domain and Size columns update as the
+session changes. Clear All is available above and below the list; it removes
+only Virtual Rules, not saved or synchronized saved Rules.
+
+Diagnostics tab
+
+Diagnostics records useful warnings and errors for the current browser session.
+Use it when something does not work as expected or when asking for help. Copy
+diagnostics copies the visible information, and Clear diagnostics removes it.
+Environment / Sync information can help with browser and synchronization
+troubleshooting.
+
+
+Installation
+------------
+
+The project currently identifies the official SmartWindowSize GitHub repository
+as its public location; it does not document a published browser-store listing.
+Check https://github.com/pedjas/SmartWindowSize for official release or
+installation information, and install only from an official location. If an
+official browser listing is offered there, use its Add or Install button, review
+requested permissions, and then open Configuration from extension controls.
+
+
+Manual installation
+-------------------
+
+Manual installation is useful when you receive an official SmartWindowSize
+package outside a browser store.
+
+For Chrome, Brave, Edge, Vivaldi, and compatible desktop Chromium browsers:
+
+1. Extract SmartWindowSize-Chrome-vX.Y.Z.zip.
+
+2. Open the browser extensions page and enable Developer mode.
+
+3. Choose Load unpacked and select the extracted folder containing manifest.json.
+
+4. To update it, replace files in that folder and use Reload for the existing
+   extension. Export JSON before deliberately removing an extension.
+
+For Firefox:
+
+1. Open about:debugging#/runtime/this-firefox.
+
+2. Choose Load Temporary Add-on.
+
+3. Extract SmartWindowSize-Firefox-vX.Y.Z.zip and select manifest.json.
+
+Temporary Firefox installation ends when Firefox restarts. A regular Firefox
+installation requires an official signed add-on when one is available.
+
+
+Support
+-------
+
+For project information and issue reporting, use
+https://github.com/pedjas/SmartWindowSize. Include your browser name and
+version, SmartWindowSize version, what you were doing, and copied Diagnostics
+information when available.
+
+
+Privacy
+-------
+
+SmartWindowSize does not use its own server, analytics, telemetry, advertising,
+or a native application. Your configuration and normal window behavior are
+handled by your browser.
+
+Rules Sync is optional. If enabled, saved Rule information can be shared through
+your browser's synchronization service with other browser instances using the
+same applicable synchronization profile or account. SmartWindowSize does not
+operate its own synchronization server. Virtual Rules and local window/session
+behavior are not synchronized.
+
+
+License
+-------
+
+SmartWindowSize is source-available software, not OSI-approved open-source
+software. You may use the official software free of charge for personal and
+non-commercial purposes. Redistribution, rebranding, publication of modified
+versions as separate products, and commercial use require prior written
+permission. See LICENSE for the complete license terms.
+
